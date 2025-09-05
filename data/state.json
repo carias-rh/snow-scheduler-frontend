@@ -1,0 +1,39 @@
+{
+  "members": [
+    {
+      "id": "45b8054a-ef47-4722-b850-37635f6abbc7",
+      "name": "Carlos Arias"
+    },
+    {
+      "id": "74b480ec-b91a-4654-a645-563e0524f250",
+      "name": "Chetan Tiwary"
+    },
+    {
+      "id": "05bbb333-77f1-4a88-b861-078e52f73c2d",
+      "name": "Wasim Raja"
+    }
+  ],
+  "schedules": [
+    {
+      "id": "a8301d1a-10e5-4c81-bb50-3316719d69e7",
+      "member_id": "45b8054a-ef47-4722-b850-37635f6abbc7",
+      "cron": "0 9 * * 1-5",
+      "timezone": "UTC",
+      "description": ""
+    },
+    {
+      "id": "da84d0b2-1e11-488a-9e27-5d3f28dda96d",
+      "member_id": "05bbb333-77f1-4a88-b861-078e52f73c2d",
+      "cron": "0 13 * * 1-5",
+      "timezone": "UTC",
+      "description": ""
+    },
+    {
+      "id": "d684e5ab-5acd-4070-9fd4-99bded18e24b",
+      "member_id": "74b480ec-b91a-4654-a645-563e0524f250",
+      "cron": "0 22 * * 1-5",
+      "timezone": "IST",
+      "description": ""
+    }
+  ]
+}

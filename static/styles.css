@@ -1,0 +1,36 @@
+/* Red Hat Design System alignment */
+:root {
+  --rhds-brand-red: #ee0000;
+  --rhds-text: #151515;
+  --rhds-text-muted: #6a6e73;
+  --rhds-border: #d2d2d2;
+  --rhds-surface: #ffffff;
+  --rhds-surface-subtle: #f5f5f5;
+  --rhds-space-100: 4px;
+  --rhds-space-200: 8px;
+  --rhds-space-300: 12px;
+  --rhds-space-400: 16px;
+  --rhds-space-600: 24px;
+  --rhds-radius-100: 3px;
+}
+
+body { font-family: "Red Hat Text", "Red Hat Display", system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", sans-serif; margin: var(--rhds-space-600); color: var(--rhds-text); background: var(--rhds-surface); }
+h1, h2, h3 { margin: 0 0 var(--rhds-space-300); font-weight: 600; }
+header h1 { font-family: "Red Hat Display", "Red Hat Text", sans-serif; }
+section { margin-bottom: var(--rhds-space-600); }
+
+table { border-collapse: collapse; width: 100%; background: var(--rhds-surface); }
+th, td { border: 1px solid var(--rhds-border); padding: var(--rhds-space-200) var(--rhds-space-400); font-size: 14px; }
+th { background: var(--rhds-surface-subtle); text-align: left; font-weight: 600; }
+
+label { display: block; margin: var(--rhds-space-200) 0; font-weight: 500; }
+input, select, button { padding: 6px 10px; border: 1px solid var(--rhds-border); border-radius: var(--rhds-radius-100); font-family: inherit; font-size: 14px; }
+input:focus, select:focus { outline: 2px solid var(--rhds-brand-red); outline-offset: 1px; }
+button { cursor: pointer; border: 1px solid var(--rhds-brand-red); background: var(--rhds-brand-red); color: #fff; font-weight: 600; }
+button:hover { filter: brightness(0.95); }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+code { background: var(--rhds-surface-subtle); padding: 2px 4px; border-radius: var(--rhds-radius-100); }
+.hint { color: var(--rhds-text-muted); font-size: 12px; }
+
+header { border-bottom: 2px solid var(--rhds-brand-red); padding-bottom: var(--rhds-space-200); margin-bottom: var(--rhds-space-600); }

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cron Shift Scheduler</title>
+  <link rel="preconnect" href="https://static.redhat.com" crossorigin>
+  <link rel="stylesheet" href="https://static.redhat.com/libs/redhat/redhat-font/latest/webfonts/red-hat-font.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#ee0000" />
+  <script type="module">
+    import 'https://unpkg.com/@rhds/elements@latest/rh-card/rh-card.js';
+    import 'https://unpkg.com/@rhds/elements@latest/rh-divider/rh-divider.js';
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Cron Shift Scheduler</h1>
+  </header>
+
+  <rh-card>
+    <h2 slot="heading">Current Shift</h2>
+    {% if current_member %}
+      <p><strong>On Shift:</strong> {{ current_member.name }}</p>
+      <p><strong>Started (UTC):</strong> {{ current_started_utc }}</p>
+    {% else %}
+      <p>No current shift.</p>
+    {% endif %}
+  </rh-card>
+
+  <rh-card>
+    <h2 slot="heading">Next Shift</h2>
+    {% if next_member %}
+      <p><strong>Next:</strong> {{ next_member.name }}</p>
+      <p><strong>Starts (UTC):</strong> {{ next_start_utc }}</p>
+    {% else %}
+      <p>No upcoming shifts configured.</p>
+    {% endif %}
+  </rh-card>
+
+  <rh-divider></rh-divider>
+
+  <rh-card>
+    <h2 slot="heading">Schedules</h2>
+    {% if schedules|length == 0 %}
+      <p>No schedules. Add one below.</p>
+    {% else %}
+      <table>
+        <thead>
+          <tr>
+            <th>Description</th>
+            <th>Member</th>
+            <th>Cron</th>
+            <th>Timezone</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for s in schedules %}
+          <tr>
+            <td>{{ s.description }}</td>
+            <td>
+              {% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}
+              {{ m.name if m else 'Unknown' }}
+            </td>
+            <td><code>{{ s.cron }}</code></td>
+            <td>{{ s.timezone }}</td>
+            <td>
+              <form method="post" action="/schedule/delete/{{ s.id }}" onsubmit="return confirm('Delete schedule?')">
+                <button type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </rh-card>
+
+  <rh-card>
+    <h3 slot="heading">Add Schedule</h3>
+    <form method="post" action="/schedule/add">
+      <label>Member
+        <select name="member_id" required>
+          <option value="" disabled selected>Select member</option>
+          {% for m in members %}
+          <option value="{{ m.id }}">{{ m.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Description
+        <input name="description" type="text" placeholder="e.g., Weekdays 09:00 UTC" />
+      </label>
+      <label>Cron
+        <input name="cron" type="text" placeholder="0 9 * * 1-5" required />
+      </label>
+      <label>Timezone
+        <input name="timezone" type="text" placeholder="IANA (e.g., Europe/Berlin, America/New_York) or abbr (IST)" value="UTC" />
+      </label>
+      <button type="submit">Add</button>
+      <p class="hint">Examples: <code>0 9 * * 1-5</code> (Mon–Fri 09:00), <code>0 8 * * *</code> (daily 08:00)</p>
+      <p class="hint">Timezone examples: <code>UTC</code>, <code>Europe/Berlin</code>, <code>America/New_York</code>, <code>Asia/Kolkata</code> (abbr: <code>IST</code>)</p>
+    </form>
+  </rh-card>
+
+  <rh-divider></rh-divider>
+
+  <rh-card>
+    <h2 slot="heading">Members</h2>
+    <ul>
+      {% for m in members %}
+      <li>
+        {{ m.name }}
+        <form method="post" action="/members/delete/{{ m.id }}" style="display:inline" onsubmit="return confirm('Delete member and their schedules?')">
+          <button type="submit">Delete</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+
+    <h3>Add Member</h3>
+    <form method="post" action="/members/add">
+      <label>Name
+        <input name="name" type="text" required />
+      </label>
+      <button type="submit">Add</button>
+    </form>
+  </rh-card>
+</body>
+</html>

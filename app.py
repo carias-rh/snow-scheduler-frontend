@@ -1,7 +1,7 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -152,6 +152,77 @@ def compute_current_shift(state: Dict[str, List[Dict]], now_utc: Optional[dateti
     return current_schedule, current_started_utc, next_schedule, next_start_utc
 
 
+def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: datetime, window_end_utc: datetime) -> List[Dict]:
+    """Compute continuous segments across the window where the active schedule/member is in effect.
+
+    Rule: The schedule that last fired before a point in time remains active until the next schedule fires.
+    """
+    schedules: List[Dict] = state.get("schedules", [])
+    if not schedules:
+        return []
+
+    # Find which schedule is active at the window start
+    latest_last: Tuple[Optional[Dict], Optional[datetime]] = (None, None)
+    for s in schedules:
+        try:
+            lf = last_fire_utc(s["cron"], s["timezone"], window_start_utc)
+        except Exception:
+            continue
+        if lf and (latest_last[1] is None or lf > latest_last[1]):
+            latest_last = (s, lf)
+    active_schedule: Optional[Dict] = latest_last[0]
+
+    # Gather all fire events within the window [start, end)
+    events: List[Tuple[datetime, Dict]] = []
+    for s in schedules:
+        try:
+            tz = ZoneInfo(canonicalize_timezone_name(s["timezone"]))
+        except Exception:
+            continue
+        # Start cron iteration from the window start in the schedule's local time
+        base_local = window_start_utc.astimezone(tz)
+        itr = croniter(s["cron"], base_local)
+        # Iterate forward until we pass the window end
+        # Guard against excessive loops
+        for _ in range(500):
+            try:
+                next_local = itr.get_next(datetime)
+            except Exception:
+                break
+            next_utc = next_local.astimezone(timezone.utc)
+            if next_utc >= window_end_utc:
+                break
+            if next_utc < window_start_utc:
+                # Just in case of TZ/offset peculiarities
+                continue
+            events.append((next_utc, s))
+
+    # Sort events by time
+    events.sort(key=lambda e: e[0])
+
+    segments: List[Dict] = []
+    prev_time = window_start_utc
+    for event_time, schedule in events:
+        if prev_time < event_time:
+            segments.append({
+                "start_utc": prev_time,
+                "end_utc": event_time,
+                "schedule": active_schedule,
+            })
+        active_schedule = schedule
+        prev_time = event_time
+
+    # Tail segment to window end
+    if prev_time < window_end_utc:
+        segments.append({
+            "start_utc": prev_time,
+            "end_utc": window_end_utc,
+            "schedule": active_schedule,
+        })
+
+    return segments
+
+
 @app.route("/")
 def index():
     state = load_state()
@@ -262,6 +333,62 @@ def delete_schedule(schedule_id: str):
 def list_schedule():
     state = load_state()
     return jsonify(state.get("schedules", []))
+
+
+@app.route("/api/timeline", methods=["GET"])
+def api_timeline():
+    """Return 24h timeline segments for a given timezone (default UTC) and date.
+
+    Query params:
+      - tz: IANA timezone or supported abbreviation, default 'UTC'
+      - date: YYYY-MM-DD in the provided timezone; defaults to today in tz
+    """
+    state = load_state()
+    tz_param = request.args.get("tz", "UTC").strip() or "UTC"
+    tz_name = canonicalize_timezone_name(tz_param)
+    tz = ZoneInfo(tz_name)
+
+    # Determine local day
+    date_param = request.args.get("date")
+    if date_param:
+        try:
+            year, month, day = [int(x) for x in date_param.split("-")]
+            local_start = datetime(year, month, day, 0, 0, 0, tzinfo=tz)
+        except Exception:
+            return jsonify({"error": "Invalid date. Use YYYY-MM-DD."}), 400
+    else:
+        now_local = get_now_utc().astimezone(tz)
+        local_start = datetime(now_local.year, now_local.month, now_local.day, 0, 0, 0, tzinfo=tz)
+
+    local_end = local_start + timedelta(days=1)
+    window_start_utc = local_start.astimezone(timezone.utc)
+    window_end_utc = local_end.astimezone(timezone.utc)
+
+    segments = compute_timeline_segments(state, window_start_utc, window_end_utc)
+    member_map = get_member_map(state)
+
+    def seg_to_json(seg: Dict) -> Dict:
+        s = seg["schedule"]
+        sched_id = s.get("id") if s else None
+        member = member_map.get(s.get("member_id")) if s else None
+        return {
+            "start_utc": seg["start_utc"].isoformat(),
+            "end_utc": seg["end_utc"].isoformat(),
+            "schedule": {
+                "id": sched_id,
+                "description": s.get("description") if s else None,
+                "member": member,
+            }
+        }
+
+    return jsonify({
+        "window": {
+            "tz": tz_name,
+            "start_utc": window_start_utc.isoformat(),
+            "end_utc": window_end_utc.isoformat(),
+        },
+        "segments": [seg_to_json(seg) for seg in segments]
+    })
 
 
 if __name__ == "__main__":

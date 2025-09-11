@@ -34,3 +34,11 @@ code { background: var(--rhds-surface-subtle); padding: 2px 4px; border-radius: 
 .hint { color: var(--rhds-text-muted); font-size: 12px; }
 
 header { border-bottom: 2px solid var(--rhds-brand-red); padding-bottom: var(--rhds-space-200); margin-bottom: var(--rhds-space-600); }
+
+/* Timeline */
+.timeline { margin-top: var(--rhds-space-400); }
+.timeline-track { position: relative; height: 40px; background: var(--rhds-surface-subtle); border: 1px solid var(--rhds-border); border-radius: var(--rhds-radius-100); overflow: hidden; }
+.timeline-segment { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
+.timeline-ticks { position: relative; height: 18px; }
+.timeline-tick { position: absolute; top: 0; width: 0; height: 100%; border-left: 1px dashed var(--rhds-border); }
+.timeline-tick-label { position: absolute; top: 2px; transform: translateX(-50%); font-size: 11px; color: var(--rhds-text-muted); background: var(--rhds-surface); padding: 0 2px; }

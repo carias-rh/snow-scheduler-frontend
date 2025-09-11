@@ -41,6 +41,15 @@
   <rh-divider></rh-divider>
 
   <rh-card>
+    <h2 slot="heading">24h Timeline</h2>
+    <div id="timeline" class="timeline">
+      <div class="timeline-track" id="timeline-track"></div>
+      <div class="timeline-ticks" id="timeline-ticks"></div>
+    </div>
+    <p class="hint">Timezone: <code id="timeline-tz">UTC</code> · Date: <code id="timeline-date"></code></p>
+  </rh-card>
+
+  <rh-card>
     <h2 slot="heading">Schedules</h2>
     {% if schedules|length == 0 %}
       <p>No schedules. Add one below.</p>
@@ -126,5 +135,97 @@
       <button type="submit">Add</button>
     </form>
   </rh-card>
+
+  <script>
+    (function() {
+      const tzDefault = 'UTC';
+      function hslaForIndex(index) {
+        const hue = (index * 53) % 360;
+        return `hsla(${hue}, 70%, 50%, 1)`;
+      }
+
+      function percentBetween(ts, start, end) {
+        return (ts - start) / (end - start) * 100;
+      }
+
+      function formatDateInTz(isoUtc, tz) {
+        try {
+          const d = new Date(isoUtc);
+          return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+        } catch (e) {
+          const d = new Date(isoUtc);
+          return d.toISOString().slice(0,10);
+        }
+      }
+
+      async function renderTimeline(tz = tzDefault) {
+        const res = await fetch(`/api/timeline?tz=${encodeURIComponent(tz)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const track = document.getElementById('timeline-track');
+        const ticks = document.getElementById('timeline-ticks');
+        const tzLabel = document.getElementById('timeline-tz');
+        const dateLabel = document.getElementById('timeline-date');
+        track.innerHTML = '';
+        ticks.innerHTML = '';
+        tzLabel.textContent = data.window.tz;
+        dateLabel.textContent = formatDateInTz(data.window.start_utc, data.window.tz);
+
+        const start = new Date(data.window.start_utc).getTime();
+        const end = new Date(data.window.end_utc).getTime();
+
+        // Build legend mapping member id to color index
+        const memberIdToColor = new Map();
+        let colorIndex = 0;
+
+        data.segments.forEach(seg => {
+          const s = new Date(seg.start_utc).getTime();
+          const e = new Date(seg.end_utc).getTime();
+          const left = Math.max(0, Math.min(100, percentBetween(s, start, end)));
+          const right = Math.max(0, Math.min(100, percentBetween(e, start, end)));
+          const width = Math.max(0, right - left);
+          const member = seg.schedule && seg.schedule.member ? seg.schedule.member : null;
+          let color = 'var(--rhds-border)';
+          let label = '—';
+          if (member) {
+            if (!memberIdToColor.has(member.id)) {
+              memberIdToColor.set(member.id, colorIndex++);
+            }
+            const idx = memberIdToColor.get(member.id);
+            color = hslaForIndex(idx);
+            label = member.name;
+          } else {
+            label = seg.schedule && seg.schedule.description ? seg.schedule.description : 'No active schedule';
+            color = '#d2d2d2';
+          }
+
+          const el = document.createElement('div');
+          el.className = 'timeline-segment';
+          el.style.left = left + '%';
+          el.style.width = width + '%';
+          el.style.background = color;
+          el.title = `${label}: ${new Date(seg.start_utc).toISOString().slice(11,16)}–${new Date(seg.end_utc).toISOString().slice(11,16)} UTC`;
+          el.textContent = label;
+          track.appendChild(el);
+        });
+
+        // Hour ticks every 3 hours
+        for (let h = 0; h <= 24; h += 3) {
+          const tickTime = start + h * 60 * 60 * 1000;
+          const left = Math.max(0, Math.min(100, percentBetween(tickTime, start, end)));
+          const tick = document.createElement('div');
+          tick.className = 'timeline-tick';
+          tick.style.left = left + '%';
+          const label = document.createElement('span');
+          label.className = 'timeline-tick-label';
+          label.textContent = String(h).padStart(2,'0') + ':00';
+          tick.appendChild(label);
+          ticks.appendChild(tick);
+        }
+      }
+
+      renderTimeline();
+    })();
+  </script>
 </body>
 </html>

@@ -50,3 +50,6 @@ header { border-bottom: 2px solid var(--rhds-brand-red); padding: var(--rhds-spa
 .timeline-ticks { position: relative; height: 18px; }
 .timeline-tick { position: absolute; top: 0; width: 0; height: 100%; border-left: 1px dashed var(--rhds-border); }
 .timeline-tick-label { position: absolute; top: 2px; transform: translateX(-50%); font-size: 11px; color: var(--rhds-text-muted); background: var(--rhds-surface); padding: 0 2px; }
+
+/* Accessibility utility */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }

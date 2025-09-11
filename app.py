@@ -329,10 +329,42 @@ def delete_schedule(schedule_id: str):
     return redirect(url_for("index"))
 
 
+@app.route("/schedule/delete", methods=["POST"])
+def delete_schedules_bulk():
+    """Bulk delete schedules from a list of ids in form field 'schedule_ids'."""
+    state = load_state()
+    ids = request.form.getlist("schedule_ids")
+    if not ids:
+        return redirect(url_for("index"))
+    before = len(state.get("schedules", []))
+    state["schedules"] = [s for s in state.get("schedules", []) if s.get("id") not in ids]
+    save_state(state)
+    after = len(state.get("schedules", []))
+    logging.info("Bulk deleted %d schedules", before - after)
+    return redirect(url_for("index"))
+
+
 @app.route("/api/schedule", methods=["GET"])
 def list_schedule():
     state = load_state()
     return jsonify(state.get("schedules", []))
+
+
+@app.route("/members/delete", methods=["POST"])
+def delete_members_bulk():
+    """Bulk delete members and their schedules. Form field 'member_ids'."""
+    state = load_state()
+    ids = set(request.form.getlist("member_ids"))
+    if not ids:
+        return redirect(url_for("index"))
+    before_m = len(state.get("members", []))
+    state["members"] = [m for m in state.get("members", []) if m.get("id") not in ids]
+    # Remove schedules belonging to deleted members
+    state["schedules"] = [s for s in state.get("schedules", []) if s.get("member_id") not in ids]
+    save_state(state)
+    after_m = len(state.get("members", []))
+    logging.info("Bulk deleted %d members and their schedules", before_m - after_m)
+    return redirect(url_for("index"))
 
 
 @app.route("/api/timeline", methods=["GET"])

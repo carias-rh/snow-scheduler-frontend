@@ -57,35 +57,35 @@
     {% if schedules|length == 0 %}
       <p>No schedules. Add one below.</p>
     {% else %}
-      <table>
-        <thead>
-          <tr>
-            <th>Description</th>
-            <th>Member</th>
-            <th>Cron</th>
-            <th>Timezone</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-        {% for s in schedules %}
-          <tr>
-            <td>{{ s.description }}</td>
-            <td>
-              {% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}
-              {{ m.name if m else 'Unknown' }}
-            </td>
-            <td><code>{{ s.cron }}</code></td>
-            <td>{{ s.timezone }}</td>
-            <td>
-              <form method="post" action="/schedule/delete/{{ s.id }}" onsubmit="return confirm('Delete schedule?')">
-                <button type="submit">Delete</button>
-              </form>
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
+      <form method="post" action="/schedule/delete" aria-labelledby="schedules-caption">
+        <table>
+          <caption id="schedules-caption" class="sr-only">Select schedules to delete</caption>
+          <thead>
+            <tr>
+              <th style="width:32px; text-align:center"><input type="checkbox" id="check-all-schedules" aria-label="Select all schedules" /></th>
+              <th>Member</th>
+              <th>Cron</th>
+              <th>Timezone</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for s in schedules %}
+            <tr>
+              <td style="text-align:center"><input type="checkbox" name="schedule_ids" value="{{ s.id }}" aria-label="Select schedule" /></td>
+              <td>
+                {% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}
+                {{ m.name if m else 'Unknown' }}
+              </td>
+              <td><code>{{ s.cron }}</code></td>
+              <td>{{ s.timezone }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+          <button type="submit" id="delete-selected-schedules" disabled>Delete selected</button>
+        </div>
+      </form>
     {% endif %}
   </rh-card>
 
@@ -119,16 +119,24 @@
 
   <rh-card>
     <h2 slot="heading">Members</h2>
-    <ul>
-      {% for m in members %}
-      <li>
-        {{ m.name }}
-        <form method="post" action="/members/delete/{{ m.id }}" style="display:inline" onsubmit="return confirm('Delete member and their schedules?')">
-          <button type="submit">Delete</button>
-        </form>
-      </li>
-      {% endfor %}
-    </ul>
+    {% if members|length == 0 %}
+      <p>No members yet. Add one below.</p>
+    {% else %}
+      <form method="post" action="/members/delete" aria-labelledby="members-caption">
+        <div id="members-caption" class="sr-only">Select members to delete</div>
+        <ul style="list-style:none; padding-left:0; margin:0">
+          {% for m in members %}
+          <li style="display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom: 1px solid var(--rhds-border);">
+            <input type="checkbox" name="member_ids" value="{{ m.id }}" aria-label="Select member {{ m.name }}" />
+            <span>{{ m.name }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+          <button type="submit" id="delete-selected-members" disabled>Delete selected</button>
+        </div>
+      </form>
+    {% endif %}
 
     <h3>Add Member</h3>
     <form method="post" action="/members/add">
@@ -228,6 +236,35 @@
       }
 
       renderTimeline();
+
+      // Minimal select-all + enable/disable logic
+      function wireSelection(containerSelector, allSelector, submitSelector) {
+        const container = document.querySelector(containerSelector);
+        if (!container) return;
+        const all = document.querySelector(allSelector);
+        const submit = document.querySelector(submitSelector);
+        function update() {
+          const boxes = container.querySelectorAll('input[type="checkbox"][name]');
+          const checked = container.querySelectorAll('input[type="checkbox"][name]:checked');
+          if (submit) submit.disabled = checked.length === 0;
+          if (all) all.checked = boxes.length > 0 && checked.length === boxes.length;
+          if (all) all.indeterminate = checked.length > 0 && checked.length < boxes.length;
+        }
+        if (all) {
+          all.addEventListener('change', () => {
+            const boxes = container.querySelectorAll('input[type="checkbox"][name]');
+            boxes.forEach(b => { b.checked = all.checked; });
+            update();
+          });
+        }
+        container.addEventListener('change', (e) => {
+          const t = e.target;
+          if (t && t.matches('input[type="checkbox"][name]')) update();
+        });
+        update();
+      }
+      wireSelection('form[action="/schedule/delete"] tbody', '#check-all-schedules', '#delete-selected-schedules');
+      wireSelection('form[action="/members/delete"]', null, '#delete-selected-members');
     })();
   </script>
 </div>

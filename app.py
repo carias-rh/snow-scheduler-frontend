@@ -296,7 +296,6 @@ def add_schedule():
     cron = request.form.get("cron", "").strip()
     timezone_name = request.form.get("timezone", "UTC").strip() or "UTC"
     member_id = request.form.get("member_id", "").strip()
-    description = request.form.get("description", "").strip()
 
     if not cron or not member_id:
         return "cron and member_id required", 400
@@ -312,7 +311,6 @@ def add_schedule():
         "member_id": member_id,
         "cron": cron,
         "timezone": canonical_tz,
-        "description": description,
     }
     state["schedules"].append(new_schedule)
     save_state(state)
@@ -408,7 +406,6 @@ def api_timeline():
             "end_utc": seg["end_utc"].isoformat(),
             "schedule": {
                 "id": sched_id,
-                "description": s.get("description") if s else None,
                 "member": member,
             }
         }

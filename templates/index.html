@@ -19,6 +19,14 @@
       <h1>Cron Shift Scheduler</h1>
     </header>
 
+    <div class="layout">
+      <nav class="sidebar" aria-label="Primary">
+        <ul>
+          <li><button class="nav-item is-active" id="nav-schedules" aria-controls="view-schedules" aria-current="page">Schedules</button></li>
+          <li><button class="nav-item" id="nav-members" aria-controls="view-members">Members</button></li>
+        </ul>
+      </nav>
+      <main class="content" id="main-content">
   <div class="grid grid-2">
     <rh-card>
       <h2 slot="heading">Current Shift</h2>
@@ -51,6 +59,9 @@
     </div>
     <p class="hint">Timezone: <code id="timeline-tz">UTC</code> · Date: <code id="timeline-date"></code></p>
   </rh-card>
+
+  <section id="view-schedules" role="region" aria-labelledby="nav-schedules">
+  
 
   <rh-card>
     <h2 slot="heading">Schedules</h2>
@@ -89,8 +100,8 @@
     {% endif %}
   </rh-card>
 
-  <rh-card>
-    <h3 slot="heading">Add Schedule</h3>
+  <rh-card class="spaced-section">
+    <h3 class="section-spacer" slot="heading">Add Schedule</h3>
     <form method="post" action="/schedule/add">
       <label>Member
         <select name="member_id" required>
@@ -100,9 +111,7 @@
           {% endfor %}
         </select>
       </label>
-      <label>Description
-        <input name="description" type="text" placeholder="e.g., Weekdays 09:00 UTC" />
-      </label>
+
       <label>Cron
         <input name="cron" type="text" placeholder="0 9 * * 1-5" required />
       </label>
@@ -114,38 +123,39 @@
       <p class="hint">Timezone examples: <code>UTC</code>, <code>Europe/Berlin</code>, <code>America/New_York</code>, <code>Asia/Kolkata</code> (abbr: <code>IST</code>)</p>
     </form>
   </rh-card>
+  </section>
 
-  <rh-divider></rh-divider>
+  <section id="view-members" role="region" aria-labelledby="nav-members" hidden>
+    <rh-card>
+      <h2 slot="heading">Members</h2>
+      {% if members|length == 0 %}
+        <p>No members yet. Add one below.</p>
+      {% else %}
+        <form method="post" action="/members/delete" aria-labelledby="members-caption">
+          <div id="members-caption" class="sr-only">Select members to delete</div>
+          <ul style="list-style:none; padding-left:0; margin:0">
+            {% for m in members %}
+            <li style="display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom: 1px solid var(--rhds-border);">
+              <input type="checkbox" name="member_ids" value="{{ m.id }}" aria-label="Select member {{ m.name }}" />
+              <span>{{ m.name }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+            <button type="submit" id="delete-selected-members" disabled>Delete selected</button>
+          </div>
+        </form>
+      {% endif %}
 
-  <rh-card>
-    <h2 slot="heading">Members</h2>
-    {% if members|length == 0 %}
-      <p>No members yet. Add one below.</p>
-    {% else %}
-      <form method="post" action="/members/delete" aria-labelledby="members-caption">
-        <div id="members-caption" class="sr-only">Select members to delete</div>
-        <ul style="list-style:none; padding-left:0; margin:0">
-          {% for m in members %}
-          <li style="display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom: 1px solid var(--rhds-border);">
-            <input type="checkbox" name="member_ids" value="{{ m.id }}" aria-label="Select member {{ m.name }}" />
-            <span>{{ m.name }}</span>
-          </li>
-          {% endfor %}
-        </ul>
-        <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
-          <button type="submit" id="delete-selected-members" disabled>Delete selected</button>
-        </div>
+      <h3 class="section-spacer">Add Member</h3>
+      <form method="post" action="/members/add">
+        <label>Name
+          <input name="name" type="text" required />
+        </label>
+        <button type="submit">Add</button>
       </form>
-    {% endif %}
-
-    <h3>Add Member</h3>
-    <form method="post" action="/members/add">
-      <label>Name
-        <input name="name" type="text" required />
-      </label>
-      <button type="submit">Add</button>
-    </form>
-  </rh-card>
+    </rh-card>
+  </section>
   
   <script>
     (function() {
@@ -265,8 +275,31 @@
       }
       wireSelection('form[action="/schedule/delete"] tbody', '#check-all-schedules', '#delete-selected-schedules');
       wireSelection('form[action="/members/delete"]', null, '#delete-selected-members');
+
+      // Sidebar navigation toggle
+      function showView(viewId, triggerBtn) {
+        const views = ['view-schedules', 'view-members'];
+        views.forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          const isTarget = id === viewId;
+          el.hidden = !isTarget;
+        });
+        document.querySelectorAll('.nav-item').forEach(btn => {
+          const isActive = btn === triggerBtn;
+          btn.classList.toggle('is-active', isActive);
+          if (isActive) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current');
+        });
+        if (viewId === 'view-schedules') renderTimeline();
+      }
+      const btnSchedules = document.getElementById('nav-schedules');
+      const btnMembers = document.getElementById('nav-members');
+      btnSchedules.addEventListener('click', () => showView('view-schedules', btnSchedules));
+      btnMembers.addEventListener('click', () => showView('view-members', btnMembers));
     })();
   </script>
-</div>
+      </main>
+    </div>
+  </div>
 </body>
 </html>

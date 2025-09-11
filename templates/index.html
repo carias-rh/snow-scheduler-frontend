@@ -105,9 +105,9 @@
     <form method="post" action="/schedule/add">
       <label>Member
         <select name="member_id" required>
-          <option value="" disabled selected>Select member</option>
+          <option value="" disabled {% if not new_member_id %}selected{% endif %}>Select member</option>
           {% for m in members %}
-          <option value="{{ m.id }}">{{ m.name }}</option>
+          <option value="{{ m.id }}" {% if new_member_id and m.id == new_member_id %}selected{% endif %}>{{ m.name }}</option>
           {% endfor %}
         </select>
       </label>

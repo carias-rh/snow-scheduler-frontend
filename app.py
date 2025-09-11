@@ -179,8 +179,10 @@ def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: da
             tz = ZoneInfo(canonicalize_timezone_name(s["timezone"]))
         except Exception:
             continue
-        # Start cron iteration from the window start in the schedule's local time
-        base_local = window_start_utc.astimezone(tz)
+        # Start iteration just BEFORE the window start, so events that fire
+        # exactly at the boundary (e.g., 00:00) are included as the first event.
+        start_minus = window_start_utc - timedelta(seconds=1)
+        base_local = start_minus.astimezone(tz)
         itr = croniter(s["cron"], base_local)
         # Iterate forward until we pass the window end
         # Guard against excessive loops
@@ -243,6 +245,7 @@ def index():
         current_started_utc=current_started_utc,
         next_member=next_member,
         next_start_utc=next_start_utc,
+        new_member_id=request.args.get("new_member_id"),
     )
 
 
@@ -277,7 +280,8 @@ def add_member():
     state["members"] = sorted(state["members"], key=lambda m: m["name"].lower())
     save_state(state)
     logging.info("Added member: %s", name)
-    return redirect(url_for("index"))
+    # Redirect with hint to preselect in Add Schedule form
+    return redirect(url_for("index", new_member_id=new_member["id"]))
 
 
 @app.route("/members/delete/<member_id>", methods=["POST"])

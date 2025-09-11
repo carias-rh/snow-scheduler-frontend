@@ -14,29 +14,32 @@
   </script>
 </head>
 <body>
-  <header>
-    <h1>Cron Shift Scheduler</h1>
-  </header>
+  <div class="container">
+    <header>
+      <h1>Cron Shift Scheduler</h1>
+    </header>
 
-  <rh-card>
-    <h2 slot="heading">Current Shift</h2>
-    {% if current_member %}
-      <p><strong>On Shift:</strong> {{ current_member.name }}</p>
-      <p><strong>Started (UTC):</strong> {{ current_started_utc }}</p>
-    {% else %}
-      <p>No current shift.</p>
-    {% endif %}
-  </rh-card>
+  <div class="grid grid-2">
+    <rh-card>
+      <h2 slot="heading">Current Shift</h2>
+      {% if current_member %}
+        <p><strong>On Shift:</strong> {{ current_member.name }}</p>
+        <p><strong>Started (UTC):</strong> {{ current_started_utc }}</p>
+      {% else %}
+        <p>No current shift.</p>
+      {% endif %}
+    </rh-card>
 
-  <rh-card>
-    <h2 slot="heading">Next Shift</h2>
-    {% if next_member %}
-      <p><strong>Next:</strong> {{ next_member.name }}</p>
-      <p><strong>Starts (UTC):</strong> {{ next_start_utc }}</p>
-    {% else %}
-      <p>No upcoming shifts configured.</p>
-    {% endif %}
-  </rh-card>
+    <rh-card>
+      <h2 slot="heading">Next Shift</h2>
+      {% if next_member %}
+        <p><strong>Next:</strong> {{ next_member.name }}</p>
+        <p><strong>Starts (UTC):</strong> {{ next_start_utc }}</p>
+      {% else %}
+        <p>No upcoming shifts configured.</p>
+      {% endif %}
+    </rh-card>
+  </div>
 
   <rh-divider></rh-divider>
 
@@ -135,7 +138,7 @@
       <button type="submit">Add</button>
     </form>
   </rh-card>
-
+  
   <script>
     (function() {
       const tzDefault = 'UTC';
@@ -227,5 +230,6 @@
       renderTimeline();
     })();
   </script>
+</div>
 </body>
 </html>

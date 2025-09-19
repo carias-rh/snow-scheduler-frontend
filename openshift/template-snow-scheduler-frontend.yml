@@ -374,6 +374,9 @@ objects:
                 - name: env-file
                   mountPath: /opt/app-root/src/.env
                   subPath: .env
+              env:
+                - name: LOG_LEVEL
+                  value: INFO
               terminationMessagePath: /dev/termination-log
               terminationMessagePolicy: File
               imagePullPolicy: Always

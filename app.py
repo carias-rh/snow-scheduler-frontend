@@ -241,6 +241,48 @@ def _determine_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> Tupl
     return active, active_started
 
 
+def _determine_all_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> Tuple[List[Dict], Optional[datetime]]:
+    """Determine all schedules active at a specific UTC time, allowing overlaps.
+
+    Returns a tuple of (list_of_active_schedules, active_set_started_utc), where
+    active_set_started_utc is when the current composition of the active set last changed.
+    """
+    # Look slightly behind to capture state transitions leading up to this time
+    window_start = at_utc - timedelta(days=2)
+    window_end = at_utc + timedelta(seconds=1)
+    events = _generate_all_events(state, window_start, window_end)
+
+    active_by_id: Dict[str, Dict] = {}
+    last_change: Optional[datetime] = None
+
+    def is_cron_schedule(s: Dict) -> bool:
+        return bool(s.get("cron")) and not _is_range_schedule(s)
+
+    for ts, kind, sched in events:
+        if ts > at_utc:
+            break
+        sid = sched.get("id")
+        if kind == "start":
+            if is_cron_schedule(sched):
+                # Cron-only model: replaces any currently active schedules
+                active_by_id = {sid: sched}
+                last_change = ts
+            else:
+                if sid not in active_by_id:
+                    active_by_id[sid] = sched
+                    last_change = ts
+        elif kind == "end":
+            if sid in active_by_id:
+                del active_by_id[sid]
+                last_change = ts
+
+    active_list = list(active_by_id.values())
+    # Provide deterministic ordering by member name for stable UI and round-robin
+    member_map = get_member_map(state)
+    active_list.sort(key=lambda s: (member_map.get(s.get("member_id"), {}).get("name", ""), s.get("id")))
+    return active_list, last_change
+
+
 def _find_next_start_after(state: Dict[str, List[Dict]], after_utc: datetime) -> Tuple[Optional[Dict], Optional[datetime]]:
     window_start = after_utc
     window_end = after_utc + timedelta(days=7)
@@ -264,20 +306,41 @@ def compute_current_shift(state: Dict[str, List[Dict]], now_utc: Optional[dateti
     return current_schedule, current_started_utc, next_schedule, next_start_utc
 
 
-def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: datetime, window_end_utc: datetime) -> List[Dict]:
-    """Compute continuous segments across the window where the active schedule/member is in effect.
+def compute_current_overlaps(state: Dict[str, List[Dict]], now_utc: Optional[datetime] = None) -> Tuple[List[Dict], Optional[datetime]]:
+    if now_utc is None:
+        now_utc = get_now_utc()
+    active_schedules, active_started = _determine_all_active_at(state, now_utc)
+    return active_schedules, active_started
 
-    Rules:
-      - A start event activates that schedule until either its end event (if provided) or the next start from any schedule.
-      - If no schedule is active, the segment's schedule is None.
+
+def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: datetime, window_end_utc: datetime) -> List[Dict]:
+    """Compute continuous segments across the window with possibly multiple active schedules.
+
+    Each returned segment is a dict: { start_utc, end_utc, schedules: [schedule, ...] }.
     """
     schedules: List[Dict] = [s for s in state.get("schedules", []) if s.get("active", True)]
     if not schedules:
         return []
 
+    # Fetch events and establish initial active set at window start
     events = _generate_all_events(state, window_start_utc - timedelta(days=2), window_end_utc)
-    # Determine active at window start by simulating up to window_start
-    active_schedule, _started = _determine_active_at(state, window_start_utc)
+
+    active_by_id: Dict[str, Dict] = {}
+    def is_cron_schedule(s: Dict) -> bool:
+        return bool(s.get("cron")) and not _is_range_schedule(s)
+
+    for ts, kind, sched in events:
+        if ts >= window_start_utc:
+            break
+        sid = sched.get("id")
+        if kind == "start":
+            if is_cron_schedule(sched):
+                active_by_id = {sid: sched}
+            else:
+                active_by_id[sid] = sched
+        elif kind == "end":
+            if sid in active_by_id:
+                del active_by_id[sid]
 
     segments: List[Dict] = []
     prev_time = window_start_utc
@@ -290,22 +353,30 @@ def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: da
             segments.append({
                 "start_utc": prev_time,
                 "end_utc": ts,
-                "schedule": active_schedule,
+                "schedules": list(active_by_id.values()),
             })
+        sid = sched.get("id")
         if kind == "start":
-            active_schedule = sched
+            if is_cron_schedule(sched):
+                active_by_id = {sid: sched}
+            else:
+                active_by_id[sid] = sched
         elif kind == "end":
-            if active_schedule and active_schedule.get("id") == sched.get("id"):
-                active_schedule = None
+            if sid in active_by_id:
+                del active_by_id[sid]
         prev_time = ts
 
     if prev_time < window_end_utc:
         segments.append({
             "start_utc": prev_time,
             "end_utc": window_end_utc,
-            "schedule": active_schedule,
+            "schedules": list(active_by_id.values()),
         })
 
+    # Sort schedules within each segment deterministically by member name
+    member_map = get_member_map(state)
+    for seg in segments:
+        seg["schedules"].sort(key=lambda s: (member_map.get(s.get("member_id"), {}).get("name", ""), s.get("id")))
     return segments
 
 
@@ -315,9 +386,12 @@ def index():
     members = state.get("members", [])
     schedules = state.get("schedules", [])
 
-    current_schedule, current_started_utc, next_schedule, next_start_utc = compute_current_shift(state)
+    # Overlapping-aware current members
+    current_schedules, current_started_utc = compute_current_overlaps(state)
+    current_schedule, _single_started, next_schedule, next_start_utc = compute_current_shift(state)
     member_map = get_member_map(state)
 
+    current_members = [member_map.get(s.get("member_id")) for s in current_schedules]
     current_member = member_map.get(current_schedule["member_id"]) if current_schedule else None
     next_member = member_map.get(next_schedule["member_id"]) if next_schedule else None
 
@@ -326,6 +400,7 @@ def index():
         members=members,
         schedules=schedules,
         current_member=current_member,
+        current_members=current_members,
         current_started_utc=current_started_utc,
         next_member=next_member,
         next_start_utc=next_start_utc,
@@ -336,14 +411,17 @@ def index():
 @app.route("/api/current_shift", methods=["GET"])
 def api_current_shift():
     state = load_state()
-    current_schedule, current_started_utc, next_schedule, next_start_utc = compute_current_shift(state)
+    current_schedules, current_started_utc = compute_current_overlaps(state)
+    current_schedule, _single_started_utc, next_schedule, next_start_utc = compute_current_shift(state)
     member_map = get_member_map(state)
     current_member = member_map.get(current_schedule["member_id"]) if current_schedule else None
+    current_members = [member_map.get(s.get("member_id")) for s in current_schedules]
     next_member = member_map.get(next_schedule["member_id"]) if next_schedule else None
 
     return jsonify({
         "current": {
             "member": current_member,
+            "members": current_members,
             "started_utc": current_started_utc.isoformat() if current_started_utc else None
         },
         "next": {
@@ -500,24 +578,48 @@ def set_schedule_active(schedule_id: str):
 @app.route("/api/shift", methods=["GET"])
 def api_shift():
     state = load_state()
-    current_schedule, _current_started_utc, _next_schedule, _next_start_utc = compute_current_shift(state)
+    now_utc = get_now_utc()
+    active_schedules, active_set_started = _determine_all_active_at(state, now_utc)
     member_map = get_member_map(state)
-
-    if current_schedule:
-        member = member_map.get(current_schedule.get("member_id"))
-        return jsonify({
-            "id": member.get("id") if member else None,
-            "name": member.get("name") if member else None,
-            "on_shift": True,
-            "round_robin": False,
-        })
-    else:
+    if not active_schedules:
         return jsonify({
             "id": None,
             "name": None,
             "on_shift": False,
             "round_robin": False,
         })
+
+    if len(active_schedules) == 1:
+        only = active_schedules[0]
+        member = member_map.get(only.get("member_id"))
+        return jsonify({
+            "id": member.get("id") if member else None,
+            "name": member.get("name") if member else None,
+            "on_shift": True,
+            "round_robin": False,
+        })
+
+    # Round-robin over the overlapping active schedules
+    # Build stable ordering (already sorted by member name in _determine_all_active_at)
+    group_key_part = "|".join([s.get("id") for s in active_schedules])
+    group_time = (active_set_started.isoformat() if active_set_started else "")
+    group_key = f"{group_time}|{group_key_part}"
+
+    rr_map = state.get("rr", {})
+    prev_index = rr_map.get(group_key, -1)
+    next_index = (prev_index + 1) % len(active_schedules)
+    rr_map[group_key] = next_index
+    state["rr"] = rr_map
+    save_state(state)
+
+    selected = active_schedules[next_index]
+    member = member_map.get(selected.get("member_id"))
+    return jsonify({
+        "id": member.get("id") if member else None,
+        "name": member.get("name") if member else None,
+        "on_shift": True,
+        "round_robin": True,
+    })
 
 
 @app.route("/members/delete", methods=["POST"])
@@ -570,16 +672,16 @@ def api_timeline():
     member_map = get_member_map(state)
 
     def seg_to_json(seg: Dict) -> Dict:
-        s = seg["schedule"]
-        sched_id = s.get("id") if s else None
-        member = member_map.get(s.get("member_id")) if s else None
+        schedules_json: List[Dict] = []
+        for s in seg.get("schedules", []):
+            schedules_json.append({
+                "id": s.get("id"),
+                "member": member_map.get(s.get("member_id")),
+            })
         return {
             "start_utc": seg["start_utc"].isoformat(),
             "end_utc": seg["end_utc"].isoformat(),
-            "schedule": {
-                "id": sched_id,
-                "member": member,
-            }
+            "schedules": schedules_json,
         }
 
     return jsonify({

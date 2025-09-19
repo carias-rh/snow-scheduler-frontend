@@ -30,7 +30,14 @@
   <div class="grid grid-2">
     <rh-card>
       <h2 slot="heading">Current Shift</h2>
-      {% if current_member %}
+      {% if current_members and current_members|length > 0 %}
+        <p><strong>On Shift:</strong>
+          {% for m in current_members %}
+            {{ m.name }}{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </p>
+        <p><strong>Started (UTC):</strong> {{ current_started_utc }}</p>
+      {% elif current_member %}
         <p><strong>On Shift:</strong> {{ current_member.name }}</p>
         <p><strong>Started (UTC):</strong> {{ current_started_utc }}</p>
       {% else %}
@@ -237,29 +244,40 @@
           const left = Math.max(0, Math.min(100, percentBetween(s, start, end)));
           const right = Math.max(0, Math.min(100, percentBetween(e, start, end)));
           const width = Math.max(0, right - left);
-          const member = seg.schedule && seg.schedule.member ? seg.schedule.member : null;
-          let color = 'var(--rhds-border)';
-          let label = '—';
-          if (member) {
+          const schedules = Array.isArray(seg.schedules) ? seg.schedules : [];
+          const count = schedules.length;
+          if (count === 0) {
+            const el = document.createElement('div');
+            el.className = 'timeline-segment';
+            el.style.left = left + '%';
+            el.style.width = width + '%';
+            el.style.background = '#d2d2d2';
+            el.title = `No active schedule: ${new Date(seg.start_utc).toISOString().slice(11,16)}–${new Date(seg.end_utc).toISOString().slice(11,16)} UTC`;
+            el.textContent = 'No active schedule';
+            track.appendChild(el);
+            return;
+          }
+          const slice = 100 / count;
+          schedules.forEach((sch, i) => {
+            const member = sch && sch.member ? sch.member : null;
+            if (!member) return;
             if (!memberIdToColor.has(member.id)) {
               memberIdToColor.set(member.id, colorIndex++);
             }
             const idx = memberIdToColor.get(member.id);
-            color = hslaForIndex(idx);
-            label = member.name;
-          } else {
-            label = seg.schedule && seg.schedule.description ? seg.schedule.description : 'No active schedule';
-            color = '#d2d2d2';
-          }
-
-          const el = document.createElement('div');
-          el.className = 'timeline-segment';
-          el.style.left = left + '%';
-          el.style.width = width + '%';
-          el.style.background = color;
-          el.title = `${label}: ${new Date(seg.start_utc).toISOString().slice(11,16)}–${new Date(seg.end_utc).toISOString().slice(11,16)} UTC`;
-          el.textContent = label;
-          track.appendChild(el);
+            const color = hslaForIndex(idx);
+            const el = document.createElement('div');
+            el.className = 'timeline-segment';
+            el.style.left = left + '%';
+            el.style.width = width + '%';
+            el.style.top = (i * slice) + '%';
+            el.style.height = slice + '%';
+            el.style.bottom = 'auto';
+            el.style.background = color;
+            el.title = `${member.name}: ${new Date(seg.start_utc).toISOString().slice(11,16)}–${new Date(seg.end_utc).toISOString().slice(11,16)} UTC`;
+            el.textContent = member.name;
+            track.appendChild(el);
+          });
         });
 
         // Hour ticks every 3 hours

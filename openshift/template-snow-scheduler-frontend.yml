@@ -1,0 +1,146 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: snow-scheduler-frontend-team
+  annotations:
+    openshift.io/display-name: Snow Scheduler Frontend
+    description: >-
+      Flask-based shifts frontend with per-team Deployment, Service, Route, and PVC.
+      Designed for multi-team deployments sharing a common image, with isolated
+      state stored under /app/data.
+    iconClass: icon-python
+labels:
+  app: snow-scheduler-frontend
+parameters:
+  - name: APP_NAME
+    value: snow-scheduler-frontend
+  - name: TEAM
+    description: Team identifier
+    required: true
+  - name: IMAGE_STREAM_NAME
+    value: snow-scheduler-frontend
+  - name: IMAGE_TAG
+    value: latest
+  - name: IMAGE_NAMESPACE
+    description: Namespace holding the ImageStream (leave blank for same namespace)
+    value: "lx-snow"
+  - name: SUBDOMAIN
+    description: FQDN for the route (e.g. rhls-apac, rhls-emea, rhls-apac, lx-t1, lx-t2 )
+    required: true
+  - name: PVC_SIZE
+    value: 5Mi
+
+objects:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: ${APP_NAME}-${TEAM}-data
+      labels:
+        app: ${APP_NAME}
+        team: ${TEAM}
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: ${PVC_SIZE}
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${APP_NAME}-${TEAM}
+      labels:
+        app: ${APP_NAME}
+        team: ${TEAM}
+        app.kubernetes.io/component: ${APP_NAME}
+        app.kubernetes.io/instance: ${APP_NAME}
+        app.kubernetes.io/name: ${APP_NAME}
+      annotations:
+        alpha.image.policy.openshift.io/resolve-names: "*"
+        app.openshift.io/route-disabled: "false"
+        app.openshift.io/vcs-ref: ""
+        app.openshift.io/vcs-uri: "https://github.com/carias-rh/snow-scheduler-frontend.git"
+        image.openshift.io/triggers: >-
+          [{"from":{"kind":"ImageStreamTag","name":"${IMAGE_STREAM_NAME}:${IMAGE_TAG}","namespace":"${IMAGE_NAMESPACE}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"${APP_NAME}\")].image","pause":"false"}]
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: ${APP_NAME}
+          team: ${TEAM}
+      strategy:
+        type: RollingUpdate
+      template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+            team: ${TEAM}
+        spec:
+          containers:
+            - name: ${APP_NAME}
+              image: "image-registry.openshift-image-registry.svc:5000/${IMAGE_NAMESPACE}/${IMAGE_STREAM_NAME}:${IMAGE_TAG}"
+              imagePullPolicy: Always
+              ports:
+                - containerPort: 5000
+                  protocol: TCP
+              readinessProbe:
+                httpGet:
+                  path: /
+                  port: 5000
+                initialDelaySeconds: 5
+                periodSeconds: 10
+                timeoutSeconds: 1
+                failureThreshold: 3
+              livenessProbe:
+                httpGet:
+                  path: /
+                  port: 5000
+                initialDelaySeconds: 15
+                periodSeconds: 20
+                timeoutSeconds: 1
+                failureThreshold: 3
+              resources: {}
+              volumeMounts:
+                - name: data
+                  mountPath: /app/data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: ${APP_NAME}-${TEAM}-data
+      # Image updates are driven by the image.openshift.io/triggers annotation above
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${APP_NAME}-${TEAM}
+      labels:
+        app: ${APP_NAME}
+        team: ${TEAM}
+    spec:
+      selector:
+        app: ${APP_NAME}
+        team: ${TEAM}
+      ports:
+        - name: http
+          port: 5000
+          targetPort: 5000
+          protocol: TCP
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: ${APP_NAME}-${TEAM}
+      labels:
+        app: ${APP_NAME}
+        team: ${TEAM}
+    spec:
+      host: ${SUBDOMAIN}.apps.tools-na100.dev.ole.redhat.com
+      to:
+        kind: Service
+        name: ${APP_NAME}-${TEAM}
+      port:
+        targetPort: http
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+      wildcardPolicy: None

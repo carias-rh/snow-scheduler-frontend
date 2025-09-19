@@ -136,6 +136,16 @@ def _is_range_schedule(s: Dict) -> bool:
     return "start_time" in s and s.get("start_time") is not None
 
 
+def _is_bounded_range_schedule(s: Dict) -> bool:
+    # Range schedule with explicit end time
+    return _is_range_schedule(s) and bool(s.get("end_time"))
+
+
+def _is_open_range_schedule(s: Dict) -> bool:
+    # Range schedule without explicit end time
+    return _is_range_schedule(s) and not bool(s.get("end_time"))
+
+
 def _generate_events_for_schedule(s: Dict, window_start_utc: datetime, window_end_utc: datetime) -> List[Tuple[datetime, str, Dict]]:
     events: List[Tuple[datetime, str, Dict]] = []
     if not s.get("active", True):
@@ -263,13 +273,22 @@ def _determine_all_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> 
             break
         sid = sched.get("id")
         if kind == "start":
-            if is_cron_schedule(sched):
-                # Cron-only model: replaces any currently active schedules
-                active_by_id = {sid: sched}
-                last_change = ts
-            else:
+            if is_cron_schedule(sched) or _is_open_range_schedule(sched):
+                # Exclusive models: cron or open-ended range replaces any active set
+                if not (len(active_by_id) == 1 and sid in active_by_id):
+                    active_by_id = {sid: sched}
+                    last_change = ts
+            elif _is_bounded_range_schedule(sched):
+                # Bounded ranges can overlap, but cannot overlap with open-ended ones
+                removed_any = False
+                to_remove = [aid for aid, a in active_by_id.items() if _is_open_range_schedule(a)]
+                for rid in to_remove:
+                    del active_by_id[rid]
+                    removed_any = True
                 if sid not in active_by_id:
                     active_by_id[sid] = sched
+                    removed_any = True
+                if removed_any:
                     last_change = ts
         elif kind == "end":
             if sid in active_by_id:
@@ -334,9 +353,14 @@ def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: da
             break
         sid = sched.get("id")
         if kind == "start":
-            if is_cron_schedule(sched):
+            if is_cron_schedule(sched) or _is_open_range_schedule(sched):
+                # Exclusive: cron or open-ended range
                 active_by_id = {sid: sched}
-            else:
+            elif _is_bounded_range_schedule(sched):
+                # Bounded ranges can overlap; remove any open-ended ones
+                to_remove = [aid for aid, a in active_by_id.items() if _is_open_range_schedule(a)]
+                for rid in to_remove:
+                    del active_by_id[rid]
                 active_by_id[sid] = sched
         elif kind == "end":
             if sid in active_by_id:
@@ -357,9 +381,12 @@ def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: da
             })
         sid = sched.get("id")
         if kind == "start":
-            if is_cron_schedule(sched):
+            if is_cron_schedule(sched) or _is_open_range_schedule(sched):
                 active_by_id = {sid: sched}
-            else:
+            elif _is_bounded_range_schedule(sched):
+                to_remove = [aid for aid, a in active_by_id.items() if _is_open_range_schedule(a)]
+                for rid in to_remove:
+                    del active_by_id[rid]
                 active_by_id[sid] = sched
         elif kind == "end":
             if sid in active_by_id:

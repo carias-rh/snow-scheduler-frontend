@@ -30,8 +30,6 @@ parameters:
     value: snow-autoassign
   - name: AUTOASSIGN_IMAGE_STREAM_NAME
     value: snow-autoassign
-  - name: AUTOASSIGN_CONFIGMAP_NAME
-    value: snow-autoassign-env-file
   - name: AUTOASSIGN_INTERVAL_SECONDS
     description: Interval in seconds for the script to check for new tickets
     value: "60"
@@ -298,25 +296,32 @@ objects:
   - apiVersion: v1
     kind: ConfigMap
     metadata:
-      name: snow-autoassign-env-file
+      name: ${TEAM}-autoassign-env-file
       namespace: ${NAMESPACE}
     immutable: false
     data:
-      .env: >
-        # ServiceNow API qa
+      .env: >+
+        # ServiceNow API
 
         SNOW_INSTANCE_URL=https://redhat.service-now.com
+
         SNOW_API_USER=api_snow_autoassign
 
+        SNOW_API_PASSWORD=
+
+
         # LMS API (for user name lookups)
+
         LMS_USERNAME=ENROLLMENT_API_ADMIN
+
         LMS_CLIENT_ID=
 
-        # LX-T1 Team Configuration
-        T1_FRONTEND_OPENSHIFT_ROUTE=https://t1-shifts-frontend-lx-snow.apps.tools-na100.dev.ole.redhat.com/
+        LMS_CLIENT_SECRET=
 
-        # LX-T2 Team Configuration
-        T2_FRONTEND_OPENSHIFT_ROUTE=https://lx-t2.apps.tools-na100.dev.ole.redhat.com/
+
+        # ${TEAM} Team Configuration
+
+        FRONTEND_OPENSHIFT_ROUTE=https://${FRONTEND_SUBDOMAIN}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
 
 
   - apiVersion: apps/v1
@@ -350,7 +355,7 @@ objects:
           volumes:
             - name: env-file
               configMap:
-                name: ${AUTOASSIGN_CONFIGMAP_NAME}
+                name: ${TEAM}-autoassign-env-file
                 items:
                   - key: .env
                     path: .env

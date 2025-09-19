@@ -1,7 +1,7 @@
 apiVersion: template.openshift.io/v1
 kind: Template
 metadata:
-  name: snow-frontend-team
+  name: snow-frontend-scheduler
   annotations:
     openshift.io/display-name: Snow Scheduler Frontend
     description: >-
@@ -10,18 +10,17 @@ metadata:
       state stored under /app/data.
     iconClass: icon-python
 labels:
-  app: snow-frontend
+  app: snow-frontend-scheduler
 parameters:
   - name: TEAM
     description: Team identifier
     required: true
   - name: FRONTEND_APP_NAME
-    value: snow-frontend
+    value: snow-frontend-scheduler
   - name: FRONTEND_IMAGE_STREAM_NAME
-    value: snow-frontend
+    value: snow-frontend-scheduler
   - name: NAMESPACE
     description: Namespace holding the ImageStream (leave blank for same namespace)
-    value: "lx-snow"
   - name: FRONTEND_SUBDOMAIN
     description: FQDN for the route (e.g. rhls-apac, rhls-emea, rhls-apac, lx-t1, lx-t2 )
     required: true
@@ -36,8 +35,33 @@ parameters:
   - name: AUTOASSIGN_INTERVAL_SECONDS
     description: Interval in seconds for the script to check for new tickets
     value: "60"
+  - name: FRONTEND_GENERIC_WEBHOOK_SECRET
+    description: Auto-generated secret for Generic webhook
+    generate: expression
+    from: "[a-zA-Z0-9]{32}"
+  - name: FRONTEND_GITHUB_WEBHOOK_SECRET
+    description: Auto-generated secret for GitHub webhook
+    generate: expression
+    from: "[a-zA-Z0-9]{32}"
 
 objects:
+
+  - kind: Secret
+    apiVersion: v1
+    metadata:
+      name: snow-frontend-generic-webhook-secret
+    type: Opaque
+    data:
+      secret: ${FRONTEND_GENERIC_WEBHOOK_SECRET}
+
+  - kind: Secret
+    apiVersion: v1
+    metadata:
+      name: snow-frontend-github-webhook-secret
+    type: Opaque
+    data:
+      secret: ${FRONTEND_GITHUB_WEBHOOK_SECRET}
+
   - kind: BuildConfig
     apiVersion: build.openshift.io/v1
     metadata:
@@ -46,7 +70,6 @@ objects:
         app.openshift.io/vcs-uri: 'https://github.com/carias-rh/snow-scheduler-frontend.git'
         openshift.io/generated-by: OpenShiftWebConsole
       name: ${FRONTEND_APP_NAME}
-      namespace: lx-snow
       labels:
         app: ${FRONTEND_APP_NAME}
         app.kubernetes.io/component: ${FRONTEND_APP_NAME}
@@ -187,7 +210,7 @@ objects:
         app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
     spec:
-      host: ${FRONTEND_SUBDOMAIN}.apps.tools-na100.dev.ole.redhat.com
+      host: ${FRONTEND_SUBDOMAIN}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
       to:
         kind: Service
         name: ${FRONTEND_APP_NAME}-${TEAM}
@@ -197,6 +220,31 @@ objects:
         termination: edge
         insecureEdgeTerminationPolicy: Redirect
       wildcardPolicy: None
+
+
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: snow-autoassign-env-file
+      namespace: ${NAMESPACE}
+    immutable: false
+    data:
+      .env: >
+        # ServiceNow API qa
+
+        SNOW_INSTANCE_URL=https://redhat.service-now.com
+        SNOW_API_USER=api_snow_autoassign
+
+        # LMS API (for user name lookups)
+        LMS_USERNAME=ENROLLMENT_API_ADMIN
+        LMS_CLIENT_ID=
+
+        # LX-T1 Team Configuration
+        T1_FRONTEND_OPENSHIFT_ROUTE=https://t1-shifts-frontend-lx-snow.apps.tools-na100.dev.ole.redhat.com/
+
+        # LX-T2 Team Configuration
+        T2_FRONTEND_OPENSHIFT_ROUTE=https://lx-t2.apps.tools-na100.dev.ole.redhat.com/
+
 
   - apiVersion: apps/v1
     kind: Deployment
@@ -211,7 +259,7 @@ objects:
       annotations:
         alpha.image.policy.openshift.io/resolve-names: "*"
         image.openshift.io/triggers: >-
-          [{"from":{"kind":"ImageStreamTag","name":"${AUTOASSIGN_IMAGE_STREAM_NAME}:latest","namespace":"${IMAGE_NAMESPACE}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"${AUTOASSIGN_APP_NAME}-${TEAM}\")].image","pause":"false"}]
+          [{"from":{"kind":"ImageStreamTag","name":"${AUTOASSIGN_IMAGE_STREAM_NAME}:latest","namespace":"${NAMESPACE}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"${AUTOASSIGN_APP_NAME}-${TEAM}\")].image","pause":"false"}]
     spec:
       replicas: 1
       selector:
@@ -236,7 +284,7 @@ objects:
                 defaultMode: 420
           containers:
             - name: ${AUTOASSIGN_APP_NAME}-${TEAM}
-              image: "image-registry.openshift-image-registry.svc:5000/${IMAGE_NAMESPACE}/${AUTOASSIGN_IMAGE_STREAM_NAME}:latest"
+              image: "image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/${AUTOASSIGN_IMAGE_STREAM_NAME}:latest"
               args:
                 - /bin/sh
                 - '-c'

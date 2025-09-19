@@ -346,10 +346,27 @@ def delete_schedules_bulk():
     return redirect(url_for("index"))
 
 
-@app.route("/api/schedule", methods=["GET"])
-def list_schedule():
+@app.route("/api/shift", methods=["GET"])
+def api_shift():
     state = load_state()
-    return jsonify(state.get("schedules", []))
+    current_schedule, _current_started_utc, _next_schedule, _next_start_utc = compute_current_shift(state)
+    member_map = get_member_map(state)
+
+    if current_schedule:
+        member = member_map.get(current_schedule.get("member_id"))
+        return jsonify({
+            "id": member.get("id") if member else None,
+            "name": member.get("name") if member else None,
+            "on_shift": True,
+            "round_robin": False,
+        })
+    else:
+        return jsonify({
+            "id": None,
+            "name": None,
+            "on_shift": False,
+            "round_robin": False,
+        })
 
 
 @app.route("/members/delete", methods=["POST"])

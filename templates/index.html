@@ -77,11 +77,12 @@
               <th>Member</th>
               <th>Cron</th>
               <th>Timezone</th>
+              <th>Active</th>
             </tr>
           </thead>
           <tbody>
           {% for s in schedules %}
-            <tr>
+            <tr class="schedule-row{% if not s.active %} is-inactive{% endif %}">
               <td style="text-align:center"><input type="checkbox" name="schedule_ids" value="{{ s.id }}" aria-label="Select schedule" /></td>
               <td>
                 {% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}
@@ -89,6 +90,9 @@
               </td>
               <td><code>{{ s.cron }}</code></td>
               <td>{{ s.timezone }}</td>
+              <td style="text-align:center">
+                <input type="checkbox" class="toggle-active" data-id="{{ s.id }}" {% if s.active %}checked{% endif %} aria-label="Toggle active" />
+              </td>
             </tr>
           {% endfor %}
           </tbody>
@@ -275,6 +279,31 @@
       }
       wireSelection('form[action="/schedule/delete"] tbody', '#check-all-schedules', '#delete-selected-schedules');
       wireSelection('form[action="/members/delete"]', null, '#delete-selected-members');
+
+      // Wire active toggle checkboxes
+      document.addEventListener('change', async (e) => {
+        const t = e.target;
+        if (!(t && t.classList && t.classList.contains('toggle-active'))) return;
+        const id = t.getAttribute('data-id');
+        const active = t.checked ? 'true' : 'false';
+        try {
+          const res = await fetch(`/schedule/set_active/${encodeURIComponent(id)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+            body: `active=${active}`
+          });
+          if (!res.ok) throw new Error('Request failed');
+          // Update row style
+          const row = t.closest('tr');
+          if (row) row.classList.toggle('is-inactive', !t.checked);
+          // Re-render timeline to reflect filtering
+          renderTimeline();
+        } catch (err) {
+          // Revert checkbox on error
+          t.checked = !t.checked;
+          alert('Failed to update active state');
+        }
+      });
 
       // Sidebar navigation toggle
       function showView(viewId, triggerBtn) {

@@ -122,7 +122,7 @@ def compute_current_shift(state: Dict[str, List[Dict]], now_utc: Optional[dateti
     if now_utc is None:
         now_utc = get_now_utc()
 
-    schedules: List[Dict] = state.get("schedules", [])
+    schedules: List[Dict] = [s for s in state.get("schedules", []) if s.get("active", True)]
     if not schedules:
         return None, None, None, None
 
@@ -157,7 +157,7 @@ def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: da
 
     Rule: The schedule that last fired before a point in time remains active until the next schedule fires.
     """
-    schedules: List[Dict] = state.get("schedules", [])
+    schedules: List[Dict] = [s for s in state.get("schedules", []) if s.get("active", True)]
     if not schedules:
         return []
 
@@ -315,6 +315,7 @@ def add_schedule():
         "member_id": member_id,
         "cron": cron,
         "timezone": canonical_tz,
+        "active": True,
     }
     state["schedules"].append(new_schedule)
     save_state(state)
@@ -345,6 +346,30 @@ def delete_schedules_bulk():
     logging.info("Bulk deleted %d schedules", before - after)
     return redirect(url_for("index"))
 
+
+@app.route("/schedule/set_active/<schedule_id>", methods=["POST"])
+def set_schedule_active(schedule_id: str):
+    """Set a schedule's active flag from form field 'active' ("true"/"false" or on/off).
+    Returns JSON for fetch-based UI or redirects for graceful fallback.
+    """
+    state = load_state()
+    active_param = (request.form.get("active") or request.args.get("active") or "").strip().lower()
+    active_value = active_param in ("1", "true", "on", "yes")
+
+    updated = False
+    for s in state.get("schedules", []):
+        if s.get("id") == schedule_id:
+            s["active"] = active_value
+            updated = True
+            break
+    if updated:
+        save_state(state)
+        logging.info("Set schedule %s active=%s", schedule_id, active_value)
+
+    # If request prefers JSON (fetch), respond JSON; else redirect
+    if request.accept_mimetypes.best == "application/json" or request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"ok": updated, "schedule_id": schedule_id, "active": active_value})
+    return redirect(url_for("index"))
 
 @app.route("/api/shift", methods=["GET"])
 def api_shift():

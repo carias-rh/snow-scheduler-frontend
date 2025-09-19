@@ -22,6 +22,7 @@ section { margin-bottom: var(--rhds-space-400); }
 table { border-collapse: collapse; width: 100%; background: var(--rhds-surface); }
 th, td { border: 1px solid var(--rhds-border); padding: var(--rhds-space-200) var(--rhds-space-400); font-size: 14px; }
 th { background: var(--rhds-surface-subtle); text-align: left; font-weight: 600; }
+.schedule-row.is-inactive { opacity: 0.55; }
 
 label { display: block; margin: var(--rhds-space-200) 0; font-weight: 500; }
 input, select, button { padding: 6px 10px; border: 1px solid var(--rhds-border); border-radius: var(--rhds-radius-100); font-family: inherit; font-size: 14px; }

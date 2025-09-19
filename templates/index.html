@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Cron Shift Scheduler</title>
+  <title>Shift Scheduler</title>
   <link rel="preconnect" href="https://static.redhat.com" crossorigin>
   <link rel="stylesheet" href="https://static.redhat.com/libs/redhat/redhat-font/latest/webfonts/red-hat-font.css" />
   <link rel="stylesheet" href="/static/styles.css" />
@@ -16,7 +16,7 @@
 <body>
   <div class="container">
     <header>
-      <h1>Cron Shift Scheduler</h1>
+      <h1>Shift Scheduler</h1>
     </header>
 
     <div class="layout">
@@ -75,7 +75,8 @@
             <tr>
               <th style="width:32px; text-align:center"><input type="checkbox" id="check-all-schedules" aria-label="Select all schedules" /></th>
               <th>Member</th>
-              <th>Cron</th>
+              <th>Range / Cron</th>
+              <th>Days</th>
               <th>Timezone</th>
               <th>Active</th>
             </tr>
@@ -88,7 +89,21 @@
                 {% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}
                 {{ m.name if m else 'Unknown' }}
               </td>
-              <td><code>{{ s.cron }}</code></td>
+              <td>
+                {% if s.cron %}
+                  <code>{{ s.cron }}</code>
+                {% else %}
+                  <code>{{ s.start_time }}</code> – <code>{{ s.end_time or 'next shift' }}</code>
+                {% endif %}
+              </td>
+              <td>
+                {% if s.cron %}
+                  —
+                {% else %}
+                  {% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+                  {% for d in s.days %}{{ day_names[d] }}{% if not loop.last %}, {% endif %}{% endfor %}
+                {% endif %}
+              </td>
               <td>{{ s.timezone }}</td>
               <td style="text-align:center">
                 <input type="checkbox" class="toggle-active" data-id="{{ s.id }}" {% if s.active %}checked{% endif %} aria-label="Toggle active" />
@@ -116,14 +131,27 @@
         </select>
       </label>
 
-      <label>Cron
-        <input name="cron" type="text" placeholder="0 9 * * 1-5" required />
+      <label>Start time
+        <input name="start_time" type="time" required />
       </label>
+      <label>End time (optional)
+        <input name="end_time" type="time" />
+      </label>
+      <fieldset style="border:0; padding:0; margin: 8px 0">
+        <legend class="sr-only">Days of week</legend>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="0" checked /> Mon</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="1" checked /> Tue</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="2" checked /> Wed</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="3" checked /> Thu</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="4" checked /> Fri</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="5" checked /> Sat</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="6" checked /> Sun</label>
+      </fieldset>
       <label>Timezone
         <input name="timezone" type="text" placeholder="IANA (e.g., Europe/Berlin, America/New_York) or abbr (IST)" value="UTC" />
       </label>
       <button type="submit">Add</button>
-      <p class="hint">Examples: <code>0 9 * * 1-5</code> (Mon–Fri 09:00), <code>0 8 * * *</code> (daily 08:00)</p>
+      <p class="hint">If end time is empty, the shift ends when the next shift starts.</p>
       <p class="hint">Timezone examples: <code>UTC</code>, <code>Europe/Berlin</code>, <code>America/New_York</code>, <code>Asia/Kolkata</code> (abbr: <code>IST</code>)</p>
     </form>
   </rh-card>

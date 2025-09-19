@@ -118,6 +118,139 @@ def next_fire_utc(cron_expr: str, tz_name: str, now_utc: datetime) -> Optional[d
     return next_local.astimezone(timezone.utc)
 
 
+def _parse_time_of_day(hhmm: str) -> time:
+    hhmm = (hhmm or "").strip()
+    if not hhmm:
+        raise ValueError("Time value required")
+    parts = hhmm.split(":")
+    if len(parts) != 2:
+        raise ValueError("Time must be HH:MM")
+    h = int(parts[0])
+    m = int(parts[1])
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError("Time must be HH:MM (00:00-23:59)")
+    return time(hour=h, minute=m)
+
+
+def _is_range_schedule(s: Dict) -> bool:
+    return "start_time" in s and s.get("start_time") is not None
+
+
+def _generate_events_for_schedule(s: Dict, window_start_utc: datetime, window_end_utc: datetime) -> List[Tuple[datetime, str, Dict]]:
+    events: List[Tuple[datetime, str, Dict]] = []
+    if not s.get("active", True):
+        return events
+
+    # Legacy cron-only schedule: only start events; shift ends on next start of any schedule
+    if "cron" in s and s.get("cron"):
+        try:
+            tz = ZoneInfo(canonicalize_timezone_name(s["timezone"]))
+        except Exception:
+            return events
+        # Start iteration a bit before window start to capture an event that may affect active state
+        start_minus = window_start_utc - timedelta(days=2)
+        base_local = start_minus.astimezone(tz)
+        itr = croniter(s["cron"], base_local)
+        for _ in range(1000):
+            try:
+                next_local = itr.get_next(datetime)
+            except Exception:
+                break
+            next_utc = next_local.astimezone(timezone.utc)
+            if next_utc >= window_end_utc:
+                break
+            events.append((next_utc, "start", s))
+        return events
+
+    # Range-based schedule: start_time, optional end_time, days list, timezone
+    if _is_range_schedule(s):
+        try:
+            tz = ZoneInfo(canonicalize_timezone_name(s["timezone"]))
+        except Exception:
+            return events
+        try:
+            start_t = _parse_time_of_day(s["start_time"])  # required
+        except Exception:
+            return events
+        end_t: Optional[time] = None
+        if s.get("end_time"):
+            try:
+                end_t = _parse_time_of_day(s["end_time"])  # optional
+            except Exception:
+                end_t = None
+        # Days are integers Monday=0 .. Sunday=6
+        try:
+            days = [int(d) for d in (s.get("days") or [])]
+        except Exception:
+            days = []
+
+        # Determine local date range to iterate
+        local_start = (window_start_utc - timedelta(days=2)).astimezone(tz)
+        local_end = (window_end_utc + timedelta(days=1)).astimezone(tz)
+        cur_date = datetime(local_start.year, local_start.month, local_start.day, 0, 0, 0, tzinfo=tz)
+        while cur_date < local_end:
+            if cur_date.weekday() in days:
+                start_local = datetime(cur_date.year, cur_date.month, cur_date.day, start_t.hour, start_t.minute, tzinfo=tz)
+                start_utc = start_local.astimezone(timezone.utc)
+                if start_utc < window_end_utc:
+                    events.append((start_utc, "start", s))
+                if end_t is not None:
+                    # If end before start, rolls over to next day
+                    end_day = cur_date
+                    if (end_t.hour, end_t.minute) <= (start_t.hour, start_t.minute):
+                        end_day = cur_date + timedelta(days=1)
+                    end_local = datetime(end_day.year, end_day.month, end_day.day, end_t.hour, end_t.minute, tzinfo=tz)
+                    end_utc = end_local.astimezone(timezone.utc)
+                    if end_utc > window_start_utc and end_utc < window_end_utc + timedelta(days=1):
+                        events.append((end_utc, "end", s))
+            cur_date = cur_date + timedelta(days=1)
+        return events
+
+    return events
+
+
+def _generate_all_events(state: Dict[str, List[Dict]], window_start_utc: datetime, window_end_utc: datetime) -> List[Tuple[datetime, str, Dict]]:
+    events: List[Tuple[datetime, str, Dict]] = []
+    for s in state.get("schedules", []):
+        try:
+            events.extend(_generate_events_for_schedule(s, window_start_utc, window_end_utc))
+        except Exception as e:
+            logging.warning("Failed to generate events for schedule %s: %s", s.get("id"), e)
+    events.sort(key=lambda e: e[0])
+    return events
+
+
+def _determine_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> Tuple[Optional[Dict], Optional[datetime]]:
+    # Generate events around the timestamp and simulate to find the active schedule and its start time
+    window_start = at_utc - timedelta(days=2)
+    window_end = at_utc + timedelta(seconds=1)
+    events = _generate_all_events(state, window_start, window_end)
+    active: Optional[Dict] = None
+    active_started: Optional[datetime] = None
+    for ts, kind, sched in events:
+        if ts > at_utc:
+            break
+        if kind == "start":
+            active = sched
+            active_started = ts
+        elif kind == "end":
+            # Only end the schedule if it is currently active
+            if active and active.get("id") == sched.get("id"):
+                active = None
+                active_started = None
+    return active, active_started
+
+
+def _find_next_start_after(state: Dict[str, List[Dict]], after_utc: datetime) -> Tuple[Optional[Dict], Optional[datetime]]:
+    window_start = after_utc
+    window_end = after_utc + timedelta(days=7)
+    events = _generate_all_events(state, window_start, window_end)
+    for ts, kind, sched in events:
+        if kind == "start" and ts > after_utc:
+            return sched, ts
+    return None, None
+
+
 def compute_current_shift(state: Dict[str, List[Dict]], now_utc: Optional[datetime] = None) -> Tuple[Optional[Dict], Optional[datetime], Optional[Dict], Optional[datetime]]:
     if now_utc is None:
         now_utc = get_now_utc()
@@ -126,95 +259,46 @@ def compute_current_shift(state: Dict[str, List[Dict]], now_utc: Optional[dateti
     if not schedules:
         return None, None, None, None
 
-    latest_last: Tuple[Optional[Dict], Optional[datetime]] = (None, None)
-    for s in schedules:
-        try:
-            lf = last_fire_utc(s["cron"], s["timezone"], now_utc)
-        except Exception as e:
-            logging.warning("Skipping schedule %s due to timezone/cron error: %s", s.get("id"), e)
-            continue
-        if lf and (latest_last[1] is None or lf > latest_last[1]):
-            latest_last = (s, lf)
-
-    current_schedule, current_started_utc = latest_last
-
-    soonest_next: Tuple[Optional[Dict], Optional[datetime]] = (None, None)
-    for s in schedules:
-        try:
-            nf = next_fire_utc(s["cron"], s["timezone"], now_utc)
-        except Exception as e:
-            logging.warning("Skipping schedule %s due to timezone/cron error: %s", s.get("id"), e)
-            continue
-        if nf and (soonest_next[1] is None or nf < soonest_next[1]):
-            soonest_next = (s, nf)
-
-    next_schedule, next_start_utc = soonest_next
+    current_schedule, current_started_utc = _determine_active_at(state, now_utc)
+    next_schedule, next_start_utc = _find_next_start_after(state, now_utc)
     return current_schedule, current_started_utc, next_schedule, next_start_utc
 
 
 def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: datetime, window_end_utc: datetime) -> List[Dict]:
     """Compute continuous segments across the window where the active schedule/member is in effect.
 
-    Rule: The schedule that last fired before a point in time remains active until the next schedule fires.
+    Rules:
+      - A start event activates that schedule until either its end event (if provided) or the next start from any schedule.
+      - If no schedule is active, the segment's schedule is None.
     """
     schedules: List[Dict] = [s for s in state.get("schedules", []) if s.get("active", True)]
     if not schedules:
         return []
 
-    # Find which schedule is active at the window start
-    latest_last: Tuple[Optional[Dict], Optional[datetime]] = (None, None)
-    for s in schedules:
-        try:
-            lf = last_fire_utc(s["cron"], s["timezone"], window_start_utc)
-        except Exception:
-            continue
-        if lf and (latest_last[1] is None or lf > latest_last[1]):
-            latest_last = (s, lf)
-    active_schedule: Optional[Dict] = latest_last[0]
-
-    # Gather all fire events within the window [start, end)
-    events: List[Tuple[datetime, Dict]] = []
-    for s in schedules:
-        try:
-            tz = ZoneInfo(canonicalize_timezone_name(s["timezone"]))
-        except Exception:
-            continue
-        # Start iteration just BEFORE the window start, so events that fire
-        # exactly at the boundary (e.g., 00:00) are included as the first event.
-        start_minus = window_start_utc - timedelta(seconds=1)
-        base_local = start_minus.astimezone(tz)
-        itr = croniter(s["cron"], base_local)
-        # Iterate forward until we pass the window end
-        # Guard against excessive loops
-        for _ in range(500):
-            try:
-                next_local = itr.get_next(datetime)
-            except Exception:
-                break
-            next_utc = next_local.astimezone(timezone.utc)
-            if next_utc >= window_end_utc:
-                break
-            if next_utc < window_start_utc:
-                # Just in case of TZ/offset peculiarities
-                continue
-            events.append((next_utc, s))
-
-    # Sort events by time
-    events.sort(key=lambda e: e[0])
+    events = _generate_all_events(state, window_start_utc - timedelta(days=2), window_end_utc)
+    # Determine active at window start by simulating up to window_start
+    active_schedule, _started = _determine_active_at(state, window_start_utc)
 
     segments: List[Dict] = []
     prev_time = window_start_utc
-    for event_time, schedule in events:
-        if prev_time < event_time:
+    for ts, kind, sched in events:
+        if ts < window_start_utc:
+            continue
+        if ts >= window_end_utc:
+            break
+        if prev_time < ts:
             segments.append({
                 "start_utc": prev_time,
-                "end_utc": event_time,
+                "end_utc": ts,
                 "schedule": active_schedule,
             })
-        active_schedule = schedule
-        prev_time = event_time
+        if kind == "start":
+            active_schedule = sched
+        elif kind == "end":
+            if active_schedule and active_schedule.get("id") == sched.get("id"):
+                active_schedule = None
+        prev_time = ts
 
-    # Tail segment to window end
     if prev_time < window_end_utc:
         segments.append({
             "start_utc": prev_time,
@@ -297,18 +381,60 @@ def delete_member(member_id: str):
 @app.route("/schedule/add", methods=["POST"])
 def add_schedule():
     state = load_state()
-    cron = request.form.get("cron", "").strip()
     timezone_name = request.form.get("timezone", "UTC").strip() or "UTC"
     member_id = request.form.get("member_id", "").strip()
 
-    if not cron or not member_id:
-        return "cron and member_id required", 400
+    if not member_id:
+        return "member_id required", 400
 
     try:
         canonical_tz = canonicalize_timezone_name(timezone_name)
+    except Exception as e:
+        return f"Invalid timezone: {e}", 400
+
+    # New range-based inputs
+    start_time = (request.form.get("start_time") or "").strip()
+    end_time = (request.form.get("end_time") or "").strip()
+    days = request.form.getlist("days")  # list of strings like ["0", "1", ...]
+
+    if start_time:
+        # Range-based schedule
+        try:
+            _ = _parse_time_of_day(start_time)
+            if end_time:
+                _ = _parse_time_of_day(end_time)
+        except Exception as e:
+            return f"Invalid time: {e}", 400
+        try:
+            days_int = [int(d) for d in days]
+            for d in days_int:
+                if d < 0 or d > 6:
+                    raise ValueError("day out of range")
+        except Exception:
+            return "Invalid days; must be integers 0=Mon .. 6=Sun", 400
+
+        new_schedule = {
+            "id": str(uuid.uuid4()),
+            "member_id": member_id,
+            "start_time": start_time,
+            "end_time": end_time or None,
+            "days": days_int,
+            "timezone": canonical_tz,
+            "active": True,
+        }
+        state["schedules"].append(new_schedule)
+        save_state(state)
+        logging.info("Added range schedule: %s %s-%s (%s) days=%s", member_id, start_time, end_time or "", canonical_tz, days_int)
+        return redirect(url_for("index"))
+
+    # Fallback for legacy cron input (still supported if provided by API or older UI)
+    cron = request.form.get("cron", "").strip()
+    if not cron:
+        return "start_time or cron required", 400
+    try:
         _ = next_fire_utc(cron, canonical_tz, get_now_utc())
     except Exception as e:
-        return f"Invalid cron/timezone: {e}", 400
+        return f"Invalid cron: {e}", 400
 
     new_schedule = {
         "id": str(uuid.uuid4()),
@@ -319,7 +445,7 @@ def add_schedule():
     }
     state["schedules"].append(new_schedule)
     save_state(state)
-    logging.info("Added schedule: %s (%s)", cron, canonical_tz)
+    logging.info("Added cron schedule: %s (%s)", cron, canonical_tz)
     return redirect(url_for("index"))
 
 

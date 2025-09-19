@@ -62,6 +62,17 @@ objects:
     data:
       secret: ${FRONTEND_GITHUB_WEBHOOK_SECRET}
 
+  - kind: ImageStream
+    apiVersion: image.openshift.io/v1
+    metadata:
+      name: ${FRONTEND_IMAGE_STREAM_NAME}
+      labels:
+        app: ${FRONTEND_APP_NAME}
+        team: ${TEAM}
+        app.kubernetes.io/component: ${FRONTEND_APP_NAME}
+        app.kubernetes.io/instance: ${FRONTEND_APP_NAME}
+        app.kubernetes.io/name: ${FRONTEND_APP_NAME}
+
   - kind: BuildConfig
     apiVersion: build.openshift.io/v1
     metadata:
@@ -221,6 +232,68 @@ objects:
         insecureEdgeTerminationPolicy: Redirect
       wildcardPolicy: None
 
+
+  - apiVersion: v1
+    kind: ImageStream
+    metadata:
+      name: ${AUTOASSIGN_IMAGE_STREAM_NAME}
+      labels:
+        app: ${AUTOASSIGN_APP_NAME}
+        team: ${TEAM}
+
+  - apiVersion: build.openshift.io/v1
+    kind: BuildConfig
+    metadata:
+      annotations:
+        app.openshift.io/vcs-ref: redesign/snow-auto-assign
+        app.openshift.io/vcs-uri: 'git@github.com:carias-rh/lx-toolbox.git'
+        openshift.io/generated-by: OpenShiftWebConsole
+      resourceVersion: '535553802'
+      name: snow-autoassign-${TEAM}
+      namespace: ${NAMESPACE}
+      labels:
+        app: snow-autoassign-${TEAM}
+        app.kubernetes.io/component: snow-autoassign-${TEAM}
+        app.kubernetes.io/instance: snow-autoassign-${TEAM}
+        app.kubernetes.io/name: snow-autoassign-${TEAM}
+        app.kubernetes.io/part-of: snow-${TEAM}
+        app.openshift.io/runtime: python
+        app.openshift.io/runtime-version: 3.9-ubi8
+    spec:
+      nodeSelector: null
+      output:
+        to:
+          kind: ImageStreamTag
+          name: 'snow-autoassign:latest'
+      resources: {}
+      successfulBuildsHistoryLimit: 5
+      failedBuildsHistoryLimit: 5
+      strategy:
+        type: Source
+        sourceStrategy:
+          from:
+            kind: DockerImage
+            name: >-
+              registry.access.redhat.com/ubi9/python-312@sha256:95ec8d3ee9f875da011639213fd254256c29bc58861ac0b11f290a291fa04435
+      postCommit: {}
+      source:
+        type: Git
+        git:
+          uri: 'git@github.com:carias-rh/lx-toolbox.git'
+          ref: redesign/snow-auto-assign
+        sourceSecret:
+          name: lx-toolbox
+      triggers:
+        - type: Generic
+          generic:
+            secretReference:
+              name: app-generic-webhook-secret
+        - type: GitHub
+          github:
+            secretReference:
+              name: app-github-webhook-secret
+        - type: ConfigChange
+      runPolicy: Serial
 
   - apiVersion: v1
     kind: ConfigMap

@@ -1,7 +1,7 @@
 apiVersion: template.openshift.io/v1
 kind: Template
 metadata:
-  name: snow-scheduler-frontend-team
+  name: snow-frontend-team
   annotations:
     openshift.io/display-name: Snow Scheduler Frontend
     description: >-
@@ -10,33 +10,85 @@ metadata:
       state stored under /app/data.
     iconClass: icon-python
 labels:
-  app: snow-scheduler-frontend
+  app: snow-frontend
 parameters:
-  - name: APP_NAME
-    value: snow-scheduler-frontend
   - name: TEAM
     description: Team identifier
     required: true
-  - name: IMAGE_STREAM_NAME
-    value: snow-scheduler-frontend
-  - name: IMAGE_TAG
-    value: latest
-  - name: IMAGE_NAMESPACE
+  - name: FRONTEND_APP_NAME
+    value: snow-frontend
+  - name: FRONTEND_IMAGE_STREAM_NAME
+    value: snow-frontend
+  - name: NAMESPACE
     description: Namespace holding the ImageStream (leave blank for same namespace)
     value: "lx-snow"
-  - name: SUBDOMAIN
+  - name: FRONTEND_SUBDOMAIN
     description: FQDN for the route (e.g. rhls-apac, rhls-emea, rhls-apac, lx-t1, lx-t2 )
     required: true
   - name: PVC_SIZE
     value: 5Mi
+  - name: AUTOASSIGN_APP_NAME
+    value: snow-autoassign
+  - name: AUTOASSIGN_IMAGE_STREAM_NAME
+    value: snow-autoassign
+  - name: AUTOASSIGN_CONFIGMAP_NAME
+    value: snow-autoassign-env-file
+  - name: AUTOASSIGN_INTERVAL_SECONDS
+    description: Interval in seconds for the script to check for new tickets
+    value: "60"
 
 objects:
+  - kind: BuildConfig
+    apiVersion: build.openshift.io/v1
+    metadata:
+      annotations:
+        app.openshift.io/vcs-ref: ''
+        app.openshift.io/vcs-uri: 'https://github.com/carias-rh/snow-scheduler-frontend.git'
+        openshift.io/generated-by: OpenShiftWebConsole
+      name: ${FRONTEND_APP_NAME}
+      namespace: lx-snow
+      labels:
+        app: ${FRONTEND_APP_NAME}
+        app.kubernetes.io/component: ${FRONTEND_APP_NAME}
+        app.kubernetes.io/instance: ${FRONTEND_APP_NAME}
+        app.kubernetes.io/name: ${FRONTEND_APP_NAME}
+    spec:
+      output:
+        to:
+          kind: ImageStreamTag
+          name: '${FRONTEND_APP_NAME}:latest'
+      resources: {}
+      successfulBuildsHistoryLimit: 5
+      failedBuildsHistoryLimit: 5
+      strategy:
+        type: Docker
+        dockerStrategy:
+          dockerfilePath: Dockerfile
+      postCommit: {}
+      source:
+        type: Git
+        git:
+          uri: 'https://github.com/carias-rh/snow-scheduler-frontend.git'
+        contextDir: /
+      triggers:
+        - type: Generic
+          generic:
+            secretReference:
+              name: snow-frontend-generic-webhook-secret
+        - type: GitHub
+          github:
+            secretReference:
+              name: snow-frontend-github-webhook-secret
+        - type: ConfigChange
+      runPolicy: Serial
+
+
   - apiVersion: v1
     kind: PersistentVolumeClaim
     metadata:
-      name: ${APP_NAME}-${TEAM}-data
+      name: ${FRONTEND_APP_NAME}-${TEAM}-data
       labels:
-        app: ${APP_NAME}
+        app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
     spec:
       accessModes:
@@ -48,37 +100,37 @@ objects:
   - apiVersion: apps/v1
     kind: Deployment
     metadata:
-      name: ${APP_NAME}-${TEAM}
+      name: ${FRONTEND_APP_NAME}-${TEAM}
       labels:
-        app: ${APP_NAME}
+        app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
-        app.kubernetes.io/component: ${APP_NAME}
-        app.kubernetes.io/instance: ${APP_NAME}
-        app.kubernetes.io/name: ${APP_NAME}
+        app.kubernetes.io/component: ${FRONTEND_APP_NAME}
+        app.kubernetes.io/instance: ${FRONTEND_APP_NAME}
+        app.kubernetes.io/name: ${FRONTEND_APP_NAME}
       annotations:
         alpha.image.policy.openshift.io/resolve-names: "*"
         app.openshift.io/route-disabled: "false"
         app.openshift.io/vcs-ref: ""
         app.openshift.io/vcs-uri: "https://github.com/carias-rh/snow-scheduler-frontend.git"
         image.openshift.io/triggers: >-
-          [{"from":{"kind":"ImageStreamTag","name":"${IMAGE_STREAM_NAME}:${IMAGE_TAG}","namespace":"${IMAGE_NAMESPACE}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"${APP_NAME}\")].image","pause":"false"}]
+          [{"from":{"kind":"ImageStreamTag","name":"${FRONTEND_IMAGE_STREAM_NAME}:latest","namespace":"${NAMESPACE}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"${FRONTEND_APP_NAME}\")].image","pause":"false"}]
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app: ${APP_NAME}
+          app: ${FRONTEND_APP_NAME}
           team: ${TEAM}
       strategy:
-        type: RollingUpdate
+        type: Recreate
       template:
         metadata:
           labels:
-            app: ${APP_NAME}
+            app: ${FRONTEND_APP_NAME}
             team: ${TEAM}
         spec:
           containers:
-            - name: ${APP_NAME}
-              image: "image-registry.openshift-image-registry.svc:5000/${IMAGE_NAMESPACE}/${IMAGE_STREAM_NAME}:${IMAGE_TAG}"
+            - name: ${FRONTEND_APP_NAME}
+              image: "image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/${FRONTEND_IMAGE_STREAM_NAME}:latest"
               imagePullPolicy: Always
               ports:
                 - containerPort: 5000
@@ -106,19 +158,20 @@ objects:
           volumes:
             - name: data
               persistentVolumeClaim:
-                claimName: ${APP_NAME}-${TEAM}-data
+                claimName: ${FRONTEND_APP_NAME}-${TEAM}-data
+
       # Image updates are driven by the image.openshift.io/triggers annotation above
 
   - apiVersion: v1
     kind: Service
     metadata:
-      name: ${APP_NAME}-${TEAM}
+      name: ${FRONTEND_APP_NAME}-${TEAM}
       labels:
-        app: ${APP_NAME}
+        app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
     spec:
       selector:
-        app: ${APP_NAME}
+        app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
       ports:
         - name: http
@@ -129,18 +182,78 @@ objects:
   - apiVersion: route.openshift.io/v1
     kind: Route
     metadata:
-      name: ${APP_NAME}-${TEAM}
+      name: ${FRONTEND_APP_NAME}-${TEAM}
       labels:
-        app: ${APP_NAME}
+        app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
     spec:
-      host: ${SUBDOMAIN}.apps.tools-na100.dev.ole.redhat.com
+      host: ${FRONTEND_SUBDOMAIN}.apps.tools-na100.dev.ole.redhat.com
       to:
         kind: Service
-        name: ${APP_NAME}-${TEAM}
+        name: ${FRONTEND_APP_NAME}-${TEAM}
       port:
         targetPort: http
       tls:
         termination: edge
         insecureEdgeTerminationPolicy: Redirect
       wildcardPolicy: None
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${AUTOASSIGN_APP_NAME}-${TEAM}
+      labels:
+        app: ${AUTOASSIGN_APP_NAME}
+        team: ${TEAM}
+        app.kubernetes.io/component: ${AUTOASSIGN_APP_NAME}
+        app.kubernetes.io/instance: ${AUTOASSIGN_APP_NAME}
+        app.kubernetes.io/name: ${AUTOASSIGN_APP_NAME}
+      annotations:
+        alpha.image.policy.openshift.io/resolve-names: "*"
+        image.openshift.io/triggers: >-
+          [{"from":{"kind":"ImageStreamTag","name":"${AUTOASSIGN_IMAGE_STREAM_NAME}:latest","namespace":"${IMAGE_NAMESPACE}"},"fieldPath":"spec.template.spec.containers[?(@.name==\"${AUTOASSIGN_APP_NAME}-${TEAM}\")].image","pause":"false"}]
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: ${AUTOASSIGN_APP_NAME}
+          team: ${TEAM}
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            app: ${AUTOASSIGN_APP_NAME}
+            team: ${TEAM}
+        spec:
+          volumes:
+            - name: env-file
+              configMap:
+                name: ${AUTOASSIGN_CONFIGMAP_NAME}
+                items:
+                  - key: .env
+                    path: .env
+                defaultMode: 420
+          containers:
+            - name: ${AUTOASSIGN_APP_NAME}-${TEAM}
+              image: "image-registry.openshift-image-registry.svc:5000/${IMAGE_NAMESPACE}/${AUTOASSIGN_IMAGE_STREAM_NAME}:latest"
+              args:
+                - /bin/sh
+                - '-c'
+                - >-
+                  cp ./config/config.ini.example ./config/config.ini ;
+                  ./scripts/lx-tool snow assign ${TEAM} --continuous --interval ${AUTOASSIGN_INTERVAL_SECONDS}
+              resources: {}
+              volumeMounts:
+                - name: env-file
+                  mountPath: /opt/app-root/src/.env
+                  subPath: .env
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              imagePullPolicy: Always
+          restartPolicy: Always
+          terminationGracePeriodSeconds: 30
+          dnsPolicy: ClusterFirst
+          securityContext: {}
+          schedulerName: default-scheduler
+      progressDeadlineSeconds: 600

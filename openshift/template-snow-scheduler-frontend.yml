@@ -21,9 +21,6 @@ parameters:
     value: snow-frontend-scheduler
   - name: NAMESPACE
     description: Namespace holding the ImageStream (leave blank for same namespace)
-  - name: FRONTEND_SUBDOMAIN
-    description: FQDN for the route (e.g. rhls-apac, rhls-emea, rhls-apac, lx-t1, lx-t2 )
-    required: true
   - name: PVC_SIZE
     value: 5Mi
   - name: AUTOASSIGN_APP_NAME
@@ -33,6 +30,20 @@ parameters:
   - name: AUTOASSIGN_INTERVAL_SECONDS
     description: Interval in seconds for the script to check for new tickets
     value: "60"
+  - name: ASSIGNMENT_GROUP_ID
+    description: >-
+      ServiceNow assignment_group sys_id for static (single-group) teams.
+      Ignored when SNOW_GROUPS_CONFIG is set.
+  - name: SNOW_GROUPS_CONFIG
+    description: >-
+      JSON defining zones and groups with their ServiceNow assignment_group_ids.
+      Example: {"zones":[{"id":"apac","name":"APAC"}],"groups":[{"id":"anz","name":"ANZ","zone_id":"apac","assignment_group_ids":["<sys_id>"]}]}
+      Leave empty for single-group teams that use ASSIGNMENT_GROUP_ID instead.
+  - name: ACKNOWLEDGMENT_TEMPLATE
+    description: >-
+      Acknowledgment message template sent to customers.
+      Supports placeholders: {customer_name}, {assignee_name}, {team_name}.
+      Leave empty to use the built-in default.
   - name: FRONTEND_GENERIC_WEBHOOK_SECRET
     description: Auto-generated secret for Generic webhook
     generate: expression
@@ -101,6 +112,7 @@ objects:
         type: Git
         git:
           uri: 'https://github.com/carias-rh/snow-scheduler-frontend.git'
+          ref: feature/cx-team
         contextDir: /
       triggers:
         - type: Generic
@@ -184,6 +196,13 @@ objects:
                 timeoutSeconds: 1
                 failureThreshold: 3
               resources: {}
+              env:
+                - name: SNOW_GROUPS_CONFIG
+                  valueFrom:
+                    configMapKeyRef:
+                      name: ${TEAM}-autoassign-env-file
+                      key: SNOW_GROUPS_CONFIG
+                      optional: true
               volumeMounts:
                 - name: data
                   mountPath: /app/data
@@ -219,7 +238,7 @@ objects:
         app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
     spec:
-      host: ${FRONTEND_SUBDOMAIN}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
+      host: ${FRONTEND_APP_NAME}-${TEAM}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
       to:
         kind: Service
         name: ${FRONTEND_APP_NAME}-${TEAM}
@@ -321,8 +340,15 @@ objects:
 
         # ${TEAM} Team Configuration
 
-        FRONTEND_OPENSHIFT_ROUTE=https://${FRONTEND_SUBDOMAIN}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
+        FRONTEND_OPENSHIFT_ROUTE=https://${FRONTEND_APP_NAME}-${TEAM}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
 
+        ${TEAM}_ASSIGNMENT_GROUP_ID=${ASSIGNMENT_GROUP_ID}
+
+        SNOW_GROUPS_CONFIG=${SNOW_GROUPS_CONFIG}
+
+        ${TEAM}_ACKNOWLEDGMENT_TEMPLATE=${ACKNOWLEDGMENT_TEMPLATE}
+
+      SNOW_GROUPS_CONFIG: "${SNOW_GROUPS_CONFIG}"
 
   - apiVersion: apps/v1
     kind: Deployment

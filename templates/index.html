@@ -24,7 +24,6 @@
         <ul>
           <li><button class="nav-item is-active" id="nav-schedules" aria-controls="view-schedules" aria-current="page">Schedules</button></li>
           <li><button class="nav-item" id="nav-members" aria-controls="view-members">Members</button></li>
-          <li><button class="nav-item" id="nav-zones" aria-controls="view-zones">Zones &amp; Groups</button></li>
         </ul>
       </nav>
       <main class="content" id="main-content">
@@ -270,93 +269,6 @@
           <input name="name" type="text" required />
         </label>
         <button type="submit">Add</button>
-      </form>
-    </rh-card>
-  </section>
-
-  {# ════════════ Zones & Groups management view ════════════ #}
-  <section id="view-zones" role="region" aria-labelledby="nav-zones" hidden>
-    <rh-card>
-      <h2 slot="heading">Zones</h2>
-      {% if zones|length == 0 %}
-        <p>No zones configured. The scheduler runs in <strong>Global mode</strong> (all schedules evaluated together). Add zones to enable per-region/group filtering.</p>
-      {% else %}
-        <table>
-          <thead><tr><th>ID</th><th>Name</th><th>Groups</th><th></th></tr></thead>
-          <tbody>
-          {% for z in zones %}
-            <tr>
-              <td><code>{{ z.id }}</code></td>
-              <td>{{ z.name }}</td>
-              <td>
-                {% set zgroups = groups | selectattr('zone_id','equalto', z.id) | list %}
-                {% for g in zgroups %}<span class="badge">{{ g.name }}</span>{% if not loop.last %} {% endif %}{% endfor %}
-                {% if zgroups|length == 0 %}<span class="hint">none</span>{% endif %}
-              </td>
-              <td>
-                <form method="post" action="/zones/delete/{{ z.id }}" style="display:inline">
-                  <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete zone {{ z.name }} and all its groups?')">Delete</button>
-                </form>
-              </td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      {% endif %}
-
-      <h3 class="section-spacer">Add Zone</h3>
-      <form method="post" action="/zones/add" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap">
-        <label>Name <input name="name" type="text" required placeholder="e.g. APAC" /></label>
-        <label>ID (optional) <input name="id" type="text" placeholder="auto-generated from name" /></label>
-        <button type="submit">Add Zone</button>
-      </form>
-    </rh-card>
-
-    <rh-card class="spaced-section">
-      <h2 slot="heading">Groups</h2>
-      {% set all_groups = groups %}
-      {% if all_groups|length == 0 %}
-        <p>No groups configured. Add groups within zones to enable per-queue filtering.</p>
-      {% else %}
-        <table>
-          <thead><tr><th>ID</th><th>Name</th><th>Zone</th><th></th></tr></thead>
-          <tbody>
-          {% for g in all_groups %}
-            <tr>
-              <td><code>{{ g.id }}</code></td>
-              <td>{{ g.name }}</td>
-              <td>
-                {% if g.zone_id %}
-                  {% set z = (zones | selectattr('id','equalto', g.zone_id) | list | first) %}
-                  {{ z.name if z else g.zone_id }}
-                {% else %}
-                  <span class="hint">—</span>
-                {% endif %}
-              </td>
-              <td>
-                <form method="post" action="/groups/delete/{{ g.id }}" style="display:inline">
-                  <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete group {{ g.name }}?')">Delete</button>
-                </form>
-              </td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      {% endif %}
-
-      <h3 class="section-spacer">Add Group</h3>
-      <form method="post" action="/groups/add" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap">
-        <label>Name <input name="name" type="text" required placeholder="e.g. ANZ" /></label>
-        <label>ID (optional) <input name="id" type="text" placeholder="auto-generated" /></label>
-        <label>Zone
-          <select name="zone_id"{% if zones|length > 0 %} required{% endif %}>
-            <option value="">— No zone —</option>
-            {% for z in zones %}
-              <option value="{{ z.id }}" {% if zones|length == 1 %}selected{% endif %}>{{ z.name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <button type="submit">Add Group</button>
       </form>
     </rh-card>
   </section>
@@ -659,7 +571,6 @@
       const viewMap = {
         'schedules': { view: 'view-schedules', btn: 'nav-schedules' },
         'members':   { view: 'view-members',   btn: 'nav-members' },
-        'zones':     { view: 'view-zones',      btn: 'nav-zones' },
       };
       function showView(key) {
         const entry = viewMap[key];
@@ -679,7 +590,6 @@
       }
       document.getElementById('nav-schedules').addEventListener('click', () => showView('schedules'));
       document.getElementById('nav-members').addEventListener('click', () => showView('members'));
-      document.getElementById('nav-zones').addEventListener('click', () => showView('zones'));
 
       // Restore tab from URL hash on page load
       const initialTab = window.location.hash.replace('#', '') || 'schedules';

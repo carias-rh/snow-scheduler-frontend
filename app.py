@@ -1,13 +1,20 @@
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone, timedelta, time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from croniter import croniter
+from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from zoneinfo import ZoneInfo
+
+# Load .env from the app directory first, then walk up to find a project-root .env.
+# In OpenShift the env vars are injected directly so load_dotenv is a no-op.
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent.parent / ".env")
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -70,6 +77,35 @@ def load_state() -> Dict[str, List[Dict]]:
 
 def save_state(state: Dict[str, List[Dict]]) -> None:
     DATA_FILE.write_text(json.dumps(state, indent=2))
+
+
+
+def sync_groups_from_config() -> None:
+    """Seed zones and groups into state.json from the SNOW_GROUPS_CONFIG env var.
+
+    Called once at startup.  Preserves members, schedules, and round-robin state.
+    """
+    raw = os.environ.get("SNOW_GROUPS_CONFIG", "").strip()
+    if not raw:
+        return
+    try:
+        cfg = json.loads(raw)
+    except json.JSONDecodeError:
+        logging.error("SNOW_GROUPS_CONFIG is not valid JSON – skipping group sync")
+        return
+
+    state = load_state()
+    state["zones"] = cfg.get("zones", [])
+    state["groups"] = cfg.get("groups", [])
+    save_state(state)
+    logging.info(
+        "Synced %d zone(s) and %d group(s) from SNOW_GROUPS_CONFIG",
+        len(state["zones"]),
+        len(state["groups"]),
+    )
+
+
+sync_groups_from_config()
 
 
 def get_member_map(state: Dict[str, List[Dict]]) -> Dict[str, Dict]:
@@ -776,69 +812,6 @@ def set_schedule_active(schedule_id: str):
 
     if request.accept_mimetypes.best == "application/json" or request.headers.get("X-Requested-With") == "fetch":
         return jsonify({"ok": updated, "schedule_id": schedule_id, "active": active_value})
-    return _redirect_back()
-
-
-# ---------------------------------------------------------------------------
-# Zone / Group CRUD
-# ---------------------------------------------------------------------------
-
-@app.route("/zones/add", methods=["POST"])
-def add_zone():
-    state = load_state()
-    name = request.form.get("name", "").strip()
-    if not name:
-        return "Name required", 400
-    zone_id = request.form.get("id", "").strip() or name.lower().replace(" ", "-")
-    zones = state.setdefault("zones", [])
-    if any(z["id"] == zone_id for z in zones):
-        return f"Zone '{zone_id}' already exists", 400
-    zones.append({"id": zone_id, "name": name})
-    save_state(state)
-    logging.info("Added zone: %s (%s)", name, zone_id)
-    return _redirect_back()
-
-
-@app.route("/zones/delete/<zone_id>", methods=["POST"])
-def delete_zone(zone_id: str):
-    state = load_state()
-    state["zones"] = [z for z in state.get("zones", []) if z["id"] != zone_id]
-    removed_groups = {g["id"] for g in state.get("groups", []) if g.get("zone_id") == zone_id}
-    state["groups"] = [g for g in state.get("groups", []) if g.get("zone_id") != zone_id]
-    for s in state.get("schedules", []):
-        if s.get("group") in removed_groups:
-            s["group"] = None
-    save_state(state)
-    logging.info("Deleted zone: %s (and %d groups)", zone_id, len(removed_groups))
-    return _redirect_back()
-
-
-@app.route("/groups/add", methods=["POST"])
-def add_group():
-    state = load_state()
-    name = request.form.get("name", "").strip()
-    zone_id = request.form.get("zone_id", "").strip() or None
-    if not name:
-        return "Name required", 400
-    group_id = request.form.get("id", "").strip() or name.lower().replace(" ", "-")
-    groups = state.setdefault("groups", [])
-    if any(g["id"] == group_id for g in groups):
-        return f"Group '{group_id}' already exists", 400
-    groups.append({"id": group_id, "name": name, "zone_id": zone_id})
-    save_state(state)
-    logging.info("Added group: %s (%s) zone=%s", name, group_id, zone_id)
-    return _redirect_back()
-
-
-@app.route("/groups/delete/<group_id>", methods=["POST"])
-def delete_group(group_id: str):
-    state = load_state()
-    state["groups"] = [g for g in state.get("groups", []) if g["id"] != group_id]
-    for s in state.get("schedules", []):
-        if s.get("group") == group_id:
-            s["group"] = None
-    save_state(state)
-    logging.info("Deleted group: %s", group_id)
     return _redirect_back()
 
 

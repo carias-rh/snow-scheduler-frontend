@@ -24,35 +24,57 @@
         <ul>
           <li><button class="nav-item is-active" id="nav-schedules" aria-controls="view-schedules" aria-current="page">Schedules</button></li>
           <li><button class="nav-item" id="nav-members" aria-controls="view-members">Members</button></li>
+          <li><button class="nav-item" id="nav-zones" aria-controls="view-zones">Zones &amp; Groups</button></li>
         </ul>
       </nav>
       <main class="content" id="main-content">
+
+  {# ── Zone / Group filter bar (only rendered when zones are configured) ── #}
+  {% if zones|length > 0 %}
+  <div class="filter-bar">
+    {% for z in zones %}
+      <a class="filter-chip{% if selected_zone == z.id and not selected_group %} is-active{% endif %}" href="{{ url_for('index', zone=z.id) }}">{{ z.name }}</a>
+    {% endfor %}
+  </div>
+  {% if selected_zone and zone_groups|length > 0 %}
+  <div class="filter-bar filter-bar--groups">
+    <a class="filter-chip filter-chip--group{% if not selected_group %} is-active{% endif %}" href="{{ url_for('index', zone=selected_zone) }}">All groups</a>
+    {% for g in zone_groups %}
+      <a class="filter-chip filter-chip--group{% if selected_group == g.id %} is-active{% endif %}" href="{{ url_for('index', zone=selected_zone, group=g.id) }}">{{ g.name }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+
   <div class="grid grid-2">
     <rh-card>
-      <h2 slot="heading">Current Shift</h2>
+      <h2 slot="heading">Current Shift{% if selected_group %} · {{ selected_group }}{% elif selected_zone %} · {{ selected_zone }}{% endif %}</h2>
+      <div id="current-shift-body">
       {% if current_members and current_members|length > 0 %}
         <p><strong>On Shift:</strong>
           {% for m in current_members %}
             {{ m.name }}{% if not loop.last %}, {% endif %}
           {% endfor %}
         </p>
-        <p><strong>Started (UTC):</strong> {{ current_started_utc }}</p>
-      {% elif current_member %}
-        <p><strong>On Shift:</strong> {{ current_member.name }}</p>
-        <p><strong>Started (UTC):</strong> {{ current_started_utc }}</p>
+        {% if current_started_utc %}
+        <p><strong>Since (UTC):</strong> {{ current_started_utc.strftime('%Y-%m-%d %H:%M') if current_started_utc.strftime is defined else current_started_utc }}</p>
+        {% endif %}
       {% else %}
         <p>No current shift.</p>
       {% endif %}
+      </div>
     </rh-card>
 
     <rh-card>
       <h2 slot="heading">Next Shift</h2>
+      <div id="next-shift-body">
       {% if next_member %}
         <p><strong>Next:</strong> {{ next_member.name }}</p>
-        <p><strong>Starts (UTC):</strong> {{ next_start_utc }}</p>
+        <p><strong>Starts (UTC):</strong> {{ next_start_utc.strftime('%Y-%m-%d %H:%M') if next_start_utc.strftime is defined else next_start_utc }}</p>
       {% else %}
         <p>No upcoming shifts configured.</p>
       {% endif %}
+      </div>
     </rh-card>
   </div>
 
@@ -61,64 +83,86 @@
   <rh-card>
     <h2 slot="heading">24h Timeline</h2>
     <div id="timeline" class="timeline">
-      <div class="timeline-track" id="timeline-track"></div>
-      <div class="timeline-ticks" id="timeline-ticks"></div>
+      <div class="gantt" id="gantt">
+        <div class="gantt-lanes" id="gantt-lanes"></div>
+        <div class="gantt-ticks" id="gantt-ticks"></div>
+      </div>
     </div>
     <p class="hint">Timezone: <code id="timeline-tz">UTC</code> · Date: <code id="timeline-date"></code></p>
   </rh-card>
 
+  {# ── Schedule table macro ── #}
+  {% macro schedule_table(rows, show_group) %}
+    {% set has_priority = rows | selectattr('priority') | list | length > 0 %}
+    <table>
+      <thead>
+        <tr>
+          <th style="width:32px; text-align:center"><input type="checkbox" class="check-all-sched" aria-label="Select all" /></th>
+          <th>Member</th>
+          {% if show_group %}<th>Group</th>{% endif %}
+          {% if has_priority %}<th>P</th>{% endif %}
+          <th>Range / Cron</th>
+          <th>Days</th>
+          <th>Timezone</th>
+          <th>Active</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for s in rows %}
+        <tr class="schedule-row{% if not s.active %} is-inactive{% endif %}">
+          <td style="text-align:center"><input type="checkbox" name="schedule_ids" value="{{ s.id }}" aria-label="Select" /></td>
+          <td>{% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}{{ m.name if m else 'Unknown' }}</td>
+          {% if show_group %}
+          <td>
+            {% if s.group %}{% set grp = (groups | selectattr('id','equalto', s.group) | list | first) %}<span class="badge">{{ grp.name if grp else s.group }}</span>{% else %}<span class="hint">—</span>{% endif %}
+          </td>
+          {% endif %}
+          {% if has_priority %}
+          <td style="text-align:center">
+            {% if s.priority %}<span class="badge badge--priority">{{ s.priority }}</span>{% else %}<span class="hint">—</span>{% endif %}
+          </td>
+          {% endif %}
+          <td>{% if s.cron %}<code>{{ s.cron }}</code>{% else %}<code>{{ s.start_time }}</code> – <code>{{ s.end_time or 'next shift' }}</code>{% endif %}</td>
+          <td>{% if s.cron %}—{% else %}{% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}{% for d in s.days %}{{ day_names[d] }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</td>
+          <td>{{ s.timezone }}</td>
+          <td style="text-align:center"><input type="checkbox" class="toggle-active" data-id="{{ s.id }}" {% if s.active %}checked{% endif %} aria-label="Toggle active" /></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endmacro %}
+
+  {# ════════════ Schedules view ════════════ #}
   <section id="view-schedules" role="region" aria-labelledby="nav-schedules">
-  
 
   <rh-card>
     <h2 slot="heading">Schedules</h2>
     {% if schedules|length == 0 %}
-      <p>No schedules. Add one below.</p>
+      <p>No schedules{% if selected_group %} for this group{% elif selected_zone %} for this zone{% endif %}. Add one below.</p>
+    {% elif selected_zone and not selected_group and zone_groups|length > 0 %}
+      {# "All groups" mode — one table per group #}
+      <form method="post" action="/schedule/delete">
+        {% for g in zone_groups %}
+          {% set g_schedules = schedules | selectattr('group', 'equalto', g.id) | list %}
+          {% if g_schedules|length > 0 %}
+            <h3 style="margin-top:var(--rhds-space-400)">{{ g.name }}</h3>
+            {{ schedule_table(g_schedules, false) }}
+          {% endif %}
+        {% endfor %}
+        {# Schedules without a group in this zone (orphans) #}
+        {% set orphan_schedules = schedules | rejectattr('group') | list %}
+        {% if orphan_schedules|length > 0 %}
+          <h3 style="margin-top:var(--rhds-space-400)">Ungrouped</h3>
+          {{ schedule_table(orphan_schedules, false) }}
+        {% endif %}
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+          <button type="submit" id="delete-selected-schedules" disabled>Delete selected</button>
+        </div>
+      </form>
     {% else %}
-      <form method="post" action="/schedule/delete" aria-labelledby="schedules-caption">
-        <table>
-          <caption id="schedules-caption" class="sr-only">Select schedules to delete</caption>
-          <thead>
-            <tr>
-              <th style="width:32px; text-align:center"><input type="checkbox" id="check-all-schedules" aria-label="Select all schedules" /></th>
-              <th>Member</th>
-              <th>Range / Cron</th>
-              <th>Days</th>
-              <th>Timezone</th>
-              <th>Active</th>
-            </tr>
-          </thead>
-          <tbody>
-          {% for s in schedules %}
-            <tr class="schedule-row{% if not s.active %} is-inactive{% endif %}">
-              <td style="text-align:center"><input type="checkbox" name="schedule_ids" value="{{ s.id }}" aria-label="Select schedule" /></td>
-              <td>
-                {% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}
-                {{ m.name if m else 'Unknown' }}
-              </td>
-              <td>
-                {% if s.cron %}
-                  <code>{{ s.cron }}</code>
-                {% else %}
-                  <code>{{ s.start_time }}</code> – <code>{{ s.end_time or 'next shift' }}</code>
-                {% endif %}
-              </td>
-              <td>
-                {% if s.cron %}
-                  —
-                {% else %}
-                  {% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
-                  {% for d in s.days %}{{ day_names[d] }}{% if not loop.last %}, {% endif %}{% endfor %}
-                {% endif %}
-              </td>
-              <td>{{ s.timezone }}</td>
-              <td style="text-align:center">
-                <input type="checkbox" class="toggle-active" data-id="{{ s.id }}" {% if s.active %}checked{% endif %} aria-label="Toggle active" />
-              </td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
+      {# Single group selected, or no zones — single table #}
+      <form method="post" action="/schedule/delete">
+        {{ schedule_table(schedules, zones|length > 0 and not selected_group) }}
         <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
           <button type="submit" id="delete-selected-schedules" disabled>Delete selected</button>
         </div>
@@ -138,6 +182,34 @@
         </select>
       </label>
 
+      {% if groups|length > 0 %}
+      <label>Group
+        <select name="group">
+          <option value="">— Global (no group) —</option>
+          {% for z in zones %}
+            <optgroup label="{{ z.name }}">
+              {% for g in groups if g.zone_id == z.id %}
+                <option value="{{ g.id }}" {% if selected_group and selected_group == g.id %}selected{% endif %}>{{ g.name }}</option>
+              {% endfor %}
+            </optgroup>
+          {% endfor %}
+          {# groups without a zone #}
+          {% set orphan_groups = groups | selectattr('zone_id', 'none') | list %}
+          {% if orphan_groups|length > 0 %}
+            <optgroup label="Ungrouped">
+              {% for g in orphan_groups %}
+                <option value="{{ g.id }}">{{ g.name }}</option>
+              {% endfor %}
+            </optgroup>
+          {% endif %}
+        </select>
+      </label>
+      {% endif %}
+
+      <label>Priority (optional)
+        <input name="priority" type="number" min="1" max="9" placeholder="e.g. 1, 2, 3" style="width:120px" />
+      </label>
+
       <label>Start time
         <input name="start_time" type="time" required />
       </label>
@@ -151,8 +223,8 @@
         <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="2" checked /> Wed</label>
         <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="3" checked /> Thu</label>
         <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="4" checked /> Fri</label>
-        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="5" checked /> Sat</label>
-        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="6" checked /> Sun</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="5" /> Sat</label>
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="6" /> Sun</label>
       </fieldset>
       <label>Timezone
         <input name="timezone" type="text" placeholder="IANA (e.g., Europe/Berlin, America/New_York) or abbr (IST)" value="UTC" />
@@ -164,6 +236,7 @@
   </rh-card>
   </section>
 
+  {# ════════════ Members view ════════════ #}
   <section id="view-members" role="region" aria-labelledby="nav-members" hidden>
     <rh-card>
       <h2 slot="heading">Members</h2>
@@ -174,9 +247,14 @@
           <div id="members-caption" class="sr-only">Select members to delete</div>
           <ul style="list-style:none; padding-left:0; margin:0">
             {% for m in members %}
-            <li style="display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom: 1px solid var(--rhds-border);">
+            <li class="member-row">
               <input type="checkbox" name="member_ids" value="{{ m.id }}" aria-label="Select member {{ m.name }}" />
-              <span>{{ m.name }}</span>
+              <span class="member-name">{{ m.name }}</span>
+              <label class="pto-switch" title="Toggle PTO for {{ m.name }}">
+                <input type="checkbox" class="pto-toggle" data-pto-member="{{ m.id }}" data-pto-name="{{ m.name }}" {% if m.id in members_on_pto %}checked{% endif %} />
+                <span class="pto-slider"></span>
+                <span class="pto-label">PTO</span>
+              </label>
             </li>
             {% endfor %}
           </ul>
@@ -195,10 +273,100 @@
       </form>
     </rh-card>
   </section>
-  
+
+  {# ════════════ Zones & Groups management view ════════════ #}
+  <section id="view-zones" role="region" aria-labelledby="nav-zones" hidden>
+    <rh-card>
+      <h2 slot="heading">Zones</h2>
+      {% if zones|length == 0 %}
+        <p>No zones configured. The scheduler runs in <strong>Global mode</strong> (all schedules evaluated together). Add zones to enable per-region/group filtering.</p>
+      {% else %}
+        <table>
+          <thead><tr><th>ID</th><th>Name</th><th>Groups</th><th></th></tr></thead>
+          <tbody>
+          {% for z in zones %}
+            <tr>
+              <td><code>{{ z.id }}</code></td>
+              <td>{{ z.name }}</td>
+              <td>
+                {% set zgroups = groups | selectattr('zone_id','equalto', z.id) | list %}
+                {% for g in zgroups %}<span class="badge">{{ g.name }}</span>{% if not loop.last %} {% endif %}{% endfor %}
+                {% if zgroups|length == 0 %}<span class="hint">none</span>{% endif %}
+              </td>
+              <td>
+                <form method="post" action="/zones/delete/{{ z.id }}" style="display:inline">
+                  <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete zone {{ z.name }} and all its groups?')">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      <h3 class="section-spacer">Add Zone</h3>
+      <form method="post" action="/zones/add" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap">
+        <label>Name <input name="name" type="text" required placeholder="e.g. APAC" /></label>
+        <label>ID (optional) <input name="id" type="text" placeholder="auto-generated from name" /></label>
+        <button type="submit">Add Zone</button>
+      </form>
+    </rh-card>
+
+    <rh-card class="spaced-section">
+      <h2 slot="heading">Groups</h2>
+      {% set all_groups = groups %}
+      {% if all_groups|length == 0 %}
+        <p>No groups configured. Add groups within zones to enable per-queue filtering.</p>
+      {% else %}
+        <table>
+          <thead><tr><th>ID</th><th>Name</th><th>Zone</th><th></th></tr></thead>
+          <tbody>
+          {% for g in all_groups %}
+            <tr>
+              <td><code>{{ g.id }}</code></td>
+              <td>{{ g.name }}</td>
+              <td>
+                {% if g.zone_id %}
+                  {% set z = (zones | selectattr('id','equalto', g.zone_id) | list | first) %}
+                  {{ z.name if z else g.zone_id }}
+                {% else %}
+                  <span class="hint">—</span>
+                {% endif %}
+              </td>
+              <td>
+                <form method="post" action="/groups/delete/{{ g.id }}" style="display:inline">
+                  <button type="submit" class="btn-sm btn-danger" onclick="return confirm('Delete group {{ g.name }}?')">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+      <h3 class="section-spacer">Add Group</h3>
+      <form method="post" action="/groups/add" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap">
+        <label>Name <input name="name" type="text" required placeholder="e.g. ANZ" /></label>
+        <label>ID (optional) <input name="id" type="text" placeholder="auto-generated" /></label>
+        <label>Zone
+          <select name="zone_id"{% if zones|length > 0 %} required{% endif %}>
+            <option value="">— No zone —</option>
+            {% for z in zones %}
+              <option value="{{ z.id }}" {% if zones|length == 1 %}selected{% endif %}>{{ z.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Add Group</button>
+      </form>
+    </rh-card>
+  </section>
+
   <script>
     (function() {
       const tzDefault = 'UTC';
+      const groupFilter = '{{ selected_group or "" }}';
+      const zoneFilter = '{{ selected_zone or "" }}';
+
       function hslaForIndex(index) {
         const hue = (index * 53) % 360;
         return `hsla(${hue}, 70%, 50%, 1)`;
@@ -219,85 +387,167 @@
       }
 
       async function renderTimeline(tz = tzDefault) {
-        const res = await fetch(`/api/timeline?tz=${encodeURIComponent(tz)}`);
+        let url = `/api/timeline?tz=${encodeURIComponent(tz)}`;
+        if (groupFilter) url += `&group=${encodeURIComponent(groupFilter)}`;
+        else if (zoneFilter) url += `&zone=${encodeURIComponent(zoneFilter)}`;
+        const res = await fetch(url);
         if (!res.ok) return;
         const data = await res.json();
-        const track = document.getElementById('timeline-track');
-        const ticks = document.getElementById('timeline-ticks');
+        const lanes = document.getElementById('gantt-lanes');
+        const ticks = document.getElementById('gantt-ticks');
         const tzLabel = document.getElementById('timeline-tz');
         const dateLabel = document.getElementById('timeline-date');
-        track.innerHTML = '';
+        lanes.innerHTML = '';
         ticks.innerHTML = '';
         tzLabel.textContent = data.window.tz;
         dateLabel.textContent = formatDateInTz(data.window.start_utc, data.window.tz);
 
-        const start = new Date(data.window.start_utc).getTime();
-        const end = new Date(data.window.end_utc).getTime();
+        const wStart = new Date(data.window.start_utc).getTime();
+        const wEnd = new Date(data.window.end_utc).getTime();
 
-        // Build legend mapping member id to color index
+        // Build per-member intervals from segments
+        const memberIntervals = new Map(); // id → { name, intervals: [{left,width,startH,endH}] }
         const memberIdToColor = new Map();
         let colorIndex = 0;
 
         data.segments.forEach(seg => {
-          const s = new Date(seg.start_utc).getTime();
-          const e = new Date(seg.end_utc).getTime();
-          const left = Math.max(0, Math.min(100, percentBetween(s, start, end)));
-          const right = Math.max(0, Math.min(100, percentBetween(e, start, end)));
+          const sT = new Date(seg.start_utc).getTime();
+          const eT = new Date(seg.end_utc).getTime();
+          const left = Math.max(0, Math.min(100, percentBetween(sT, wStart, wEnd)));
+          const right = Math.max(0, Math.min(100, percentBetween(eT, wStart, wEnd)));
           const width = Math.max(0, right - left);
-          const schedules = Array.isArray(seg.schedules) ? seg.schedules : [];
-          const count = schedules.length;
-          if (count === 0) {
-            const el = document.createElement('div');
-            el.className = 'timeline-segment';
-            el.style.left = left + '%';
-            el.style.width = width + '%';
-            el.style.background = '#d2d2d2';
-            el.title = `No active schedule: ${new Date(seg.start_utc).toISOString().slice(11,16)}–${new Date(seg.end_utc).toISOString().slice(11,16)} UTC`;
-            el.textContent = 'No active schedule';
-            track.appendChild(el);
-            return;
-          }
-          const slice = 100 / count;
-          schedules.forEach((sch, i) => {
-            const member = sch && sch.member ? sch.member : null;
-            if (!member) return;
-            if (!memberIdToColor.has(member.id)) {
-              memberIdToColor.set(member.id, colorIndex++);
+          const startH = new Date(seg.start_utc).toISOString().slice(11, 16);
+          const endH = new Date(seg.end_utc).toISOString().slice(11, 16);
+          (seg.schedules || []).forEach(sch => {
+            const m = sch && sch.member;
+            if (!m) return;
+            if (!memberIntervals.has(m.id)) {
+              memberIntervals.set(m.id, { name: m.name, id: m.id, intervals: [] });
             }
-            const idx = memberIdToColor.get(member.id);
-            const color = hslaForIndex(idx);
-            const el = document.createElement('div');
-            el.className = 'timeline-segment';
-            el.style.left = left + '%';
-            el.style.width = width + '%';
-            el.style.top = (i * slice) + '%';
-            el.style.height = slice + '%';
-            el.style.bottom = 'auto';
-            el.style.background = color;
-            el.title = `${member.name}: ${new Date(seg.start_utc).toISOString().slice(11,16)}–${new Date(seg.end_utc).toISOString().slice(11,16)} UTC`;
-            el.textContent = member.name;
-            track.appendChild(el);
+            memberIntervals.get(m.id).intervals.push({ left, width, startH, endH });
+            if (!memberIdToColor.has(m.id)) memberIdToColor.set(m.id, colorIndex++);
           });
         });
 
-        // Hour ticks every 3 hours
+        // Merge adjacent intervals per member for cleaner rendering
+        function mergeIntervals(intervals) {
+          if (!intervals.length) return intervals;
+          intervals.sort((a, b) => a.left - b.left);
+          const merged = [{ ...intervals[0] }];
+          for (let i = 1; i < intervals.length; i++) {
+            const prev = merged[merged.length - 1];
+            const cur = intervals[i];
+            if (Math.abs(cur.left - (prev.left + prev.width)) < 0.01) {
+              prev.width = (cur.left + cur.width) - prev.left;
+              prev.endH = cur.endH;
+            } else {
+              merged.push({ ...cur });
+            }
+          }
+          return merged;
+        }
+
+        if (memberIntervals.size === 0) {
+          const row = document.createElement('div');
+          row.className = 'gantt-lane';
+          const label = document.createElement('div');
+          label.className = 'gantt-label';
+          label.textContent = '';
+          const track = document.createElement('div');
+          track.className = 'gantt-track';
+          const block = document.createElement('div');
+          block.className = 'gantt-block gantt-block--empty';
+          block.style.left = '0%';
+          block.style.width = '100%';
+          block.textContent = 'No active schedules';
+          track.appendChild(block);
+          row.appendChild(label);
+          row.appendChild(track);
+          lanes.appendChild(row);
+        } else {
+          // Sort members alphabetically
+          const sorted = [...memberIntervals.values()].sort((a, b) => a.name.localeCompare(b.name));
+          sorted.forEach(member => {
+            const color = hslaForIndex(memberIdToColor.get(member.id));
+            const row = document.createElement('div');
+            row.className = 'gantt-lane';
+            const label = document.createElement('div');
+            label.className = 'gantt-label';
+            label.textContent = member.name;
+            const track = document.createElement('div');
+            track.className = 'gantt-track';
+
+            mergeIntervals(member.intervals).forEach(iv => {
+              const block = document.createElement('div');
+              block.className = 'gantt-block';
+              block.style.left = iv.left + '%';
+              block.style.width = iv.width + '%';
+              block.style.background = color;
+              block.title = `${member.name}: ${iv.startH}–${iv.endH} UTC`;
+              track.appendChild(block);
+            });
+
+            row.appendChild(label);
+            row.appendChild(track);
+            lanes.appendChild(row);
+          });
+        }
+
+        // Hour ticks
         for (let h = 0; h <= 24; h += 3) {
-          const tickTime = start + h * 60 * 60 * 1000;
-          const left = Math.max(0, Math.min(100, percentBetween(tickTime, start, end)));
+          const tickTime = wStart + h * 60 * 60 * 1000;
+          const left = Math.max(0, Math.min(100, percentBetween(tickTime, wStart, wEnd)));
           const tick = document.createElement('div');
-          tick.className = 'timeline-tick';
+          tick.className = 'gantt-tick';
           tick.style.left = left + '%';
-          const label = document.createElement('span');
-          label.className = 'timeline-tick-label';
-          label.textContent = String(h).padStart(2,'0') + ':00';
-          tick.appendChild(label);
+          const lbl = document.createElement('span');
+          lbl.className = 'gantt-tick-label';
+          lbl.textContent = String(h).padStart(2, '0') + ':00';
+          tick.appendChild(lbl);
           ticks.appendChild(tick);
         }
       }
 
       renderTimeline();
 
-      // Minimal select-all + enable/disable logic
+      async function refreshShiftCards() {
+        let url = '/api/current_shift';
+        if (groupFilter) url += `?group=${encodeURIComponent(groupFilter)}`;
+        else if (zoneFilter) url += `?zone=${encodeURIComponent(zoneFilter)}`;
+        try {
+          const res = await fetch(url);
+          if (!res.ok) return;
+          const d = await res.json();
+          const curEl = document.getElementById('current-shift-body');
+          const nextEl = document.getElementById('next-shift-body');
+          if (curEl) {
+            const members = d.current.members || [];
+            const names = members.filter(Boolean).map(m => m.name);
+            if (names.length > 0) {
+              let html = `<p><strong>On Shift:</strong> ${names.join(', ')}</p>`;
+              if (d.current.started_utc) {
+                html += `<p><strong>Since (UTC):</strong> ${d.current.started_utc.replace('T', ' ').slice(0, 16)}</p>`;
+              }
+              curEl.innerHTML = html;
+            } else {
+              curEl.innerHTML = '<p>No current shift.</p>';
+            }
+          }
+          if (nextEl) {
+            if (d.next.member) {
+              let html = `<p><strong>Next:</strong> ${d.next.member.name}</p>`;
+              if (d.next.start_utc) {
+                html += `<p><strong>Starts (UTC):</strong> ${d.next.start_utc.replace('T', ' ').slice(0, 16)}</p>`;
+              }
+              nextEl.innerHTML = html;
+            } else {
+              nextEl.innerHTML = '<p>No upcoming shifts configured.</p>';
+            }
+          }
+        } catch (e) { /* silent */ }
+      }
+
+      // Select-all + enable/disable logic
       function wireSelection(containerSelector, allSelector, submitSelector) {
         const container = document.querySelector(containerSelector);
         if (!container) return;
@@ -323,10 +573,33 @@
         });
         update();
       }
-      wireSelection('form[action="/schedule/delete"] tbody', '#check-all-schedules', '#delete-selected-schedules');
+      // Per-table select-all for schedule tables
+      document.querySelectorAll('.check-all-sched').forEach(allCb => {
+        const table = allCb.closest('table');
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        allCb.addEventListener('change', () => {
+          tbody.querySelectorAll('input[type="checkbox"][name]').forEach(b => { b.checked = allCb.checked; });
+          updateDeleteBtn();
+        });
+        tbody.addEventListener('change', (e) => {
+          if (!e.target.matches('input[type="checkbox"][name]')) return;
+          const boxes = tbody.querySelectorAll('input[type="checkbox"][name]');
+          const checked = tbody.querySelectorAll('input[type="checkbox"][name]:checked');
+          allCb.checked = boxes.length > 0 && checked.length === boxes.length;
+          allCb.indeterminate = checked.length > 0 && checked.length < boxes.length;
+          updateDeleteBtn();
+        });
+      });
+      function updateDeleteBtn() {
+        const form = document.querySelector('form[action="/schedule/delete"]');
+        const btn = document.getElementById('delete-selected-schedules');
+        if (form && btn) btn.disabled = form.querySelectorAll('input[name="schedule_ids"]:checked').length === 0;
+      }
+      updateDeleteBtn();
       wireSelection('form[action="/members/delete"]', null, '#delete-selected-members');
 
-      // Wire active toggle checkboxes
+      // Active toggle checkboxes
       document.addEventListener('change', async (e) => {
         const t = e.target;
         if (!(t && t.classList && t.classList.contains('toggle-active'))) return;
@@ -339,38 +612,95 @@
             body: `active=${active}`
           });
           if (!res.ok) throw new Error('Request failed');
-          // Update row style
           const row = t.closest('tr');
           if (row) row.classList.toggle('is-inactive', !t.checked);
-          // Re-render timeline to reflect filtering
           renderTimeline();
+          refreshShiftCards();
         } catch (err) {
-          // Revert checkbox on error
           t.checked = !t.checked;
           alert('Failed to update active state');
         }
       });
 
-      // Sidebar navigation toggle
-      function showView(viewId, triggerBtn) {
-        const views = ['view-schedules', 'view-members'];
-        views.forEach(id => {
-          const el = document.getElementById(id);
-          if (!el) return;
-          const isTarget = id === viewId;
-          el.hidden = !isTarget;
+      // PTO toggle switches
+      document.addEventListener('change', async (e) => {
+        const toggle = e.target;
+        if (!toggle.classList.contains('pto-toggle')) return;
+        const memberId = toggle.getAttribute('data-pto-member');
+        const memberName = toggle.getAttribute('data-pto-name') || memberId;
+        const goingOnPto = toggle.checked;
+        const active = goingOnPto ? 'false' : 'true';
+        const label = goingOnPto ? 'PTO On' : 'PTO Off';
+        if (!confirm(`${label} for ${memberName}?`)) {
+          toggle.checked = !toggle.checked;
+          return;
+        }
+        try {
+          const res = await fetch(`/members/toggle_schedules/${encodeURIComponent(memberId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+            body: `active=${active}`
+          });
+          if (!res.ok) throw new Error('Request failed');
+          const data = await res.json();
+          let msg = `${data.member_name}: ${data.count} schedule(s) ${goingOnPto ? 'deactivated' : 'activated'}`;
+          if (data.skipped > 0) {
+            msg += `\n${data.skipped} schedule(s) kept inactive (higher-priority person is active)`;
+          }
+          alert(msg);
+          location.reload();
+        } catch (err) {
+          toggle.checked = !toggle.checked;
+          alert('Failed to toggle PTO');
+        }
+      });
+
+      // Sidebar navigation with URL hash persistence
+      const viewMap = {
+        'schedules': { view: 'view-schedules', btn: 'nav-schedules' },
+        'members':   { view: 'view-members',   btn: 'nav-members' },
+        'zones':     { view: 'view-zones',      btn: 'nav-zones' },
+      };
+      function showView(key) {
+        const entry = viewMap[key];
+        if (!entry) return;
+        Object.values(viewMap).forEach(v => {
+          const el = document.getElementById(v.view);
+          if (el) el.hidden = v.view !== entry.view;
+          const btn = document.getElementById(v.btn);
+          if (btn) {
+            btn.classList.toggle('is-active', v.btn === entry.btn);
+            if (v.btn === entry.btn) btn.setAttribute('aria-current', 'page');
+            else btn.removeAttribute('aria-current');
+          }
         });
-        document.querySelectorAll('.nav-item').forEach(btn => {
-          const isActive = btn === triggerBtn;
-          btn.classList.toggle('is-active', isActive);
-          if (isActive) btn.setAttribute('aria-current', 'page'); else btn.removeAttribute('aria-current');
-        });
-        if (viewId === 'view-schedules') renderTimeline();
+        window.location.hash = key;
+        if (key === 'schedules') renderTimeline();
       }
-      const btnSchedules = document.getElementById('nav-schedules');
-      const btnMembers = document.getElementById('nav-members');
-      btnSchedules.addEventListener('click', () => showView('view-schedules', btnSchedules));
-      btnMembers.addEventListener('click', () => showView('view-members', btnMembers));
+      document.getElementById('nav-schedules').addEventListener('click', () => showView('schedules'));
+      document.getElementById('nav-members').addEventListener('click', () => showView('members'));
+      document.getElementById('nav-zones').addEventListener('click', () => showView('zones'));
+
+      // Restore tab from URL hash on page load
+      const initialTab = window.location.hash.replace('#', '') || 'schedules';
+      if (initialTab !== 'schedules') showView(initialTab);
+
+      // Preserve tab across form submissions by appending #hash to the redirect
+      document.querySelectorAll('form[method="post"]').forEach(form => {
+        form.addEventListener('submit', () => {
+          const hash = window.location.hash;
+          if (hash) {
+            let input = form.querySelector('input[name="_tab"]');
+            if (!input) {
+              input = document.createElement('input');
+              input.type = 'hidden';
+              input.name = '_tab';
+              form.appendChild(input);
+            }
+            input.value = hash.replace('#', '');
+          }
+        });
+      });
     })();
   </script>
       </main>

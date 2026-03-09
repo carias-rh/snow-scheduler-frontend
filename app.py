@@ -50,12 +50,15 @@ def ensure_data_file() -> None:
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     if not DATA_FILE.exists():
         initial_state = {
+            "zones": [],
+            "groups": [],
             "members": [
                 {"id": str(uuid.uuid4()), "name": "Alice"},
                 {"id": str(uuid.uuid4()), "name": "Bob"},
                 {"id": str(uuid.uuid4()), "name": "Charlie"},
             ],
             "schedules": [],
+            "rr": {},
         }
         DATA_FILE.write_text(json.dumps(initial_state, indent=2))
 
@@ -71,6 +74,39 @@ def save_state(state: Dict[str, List[Dict]]) -> None:
 
 def get_member_map(state: Dict[str, List[Dict]]) -> Dict[str, Dict]:
     return {m["id"]: m for m in state.get("members", [])}
+
+
+def _redirect_back():
+    """Redirect to the referrer or index, preserving the sidebar tab via the ``_tab`` form field."""
+    tab = (request.form.get("_tab") or "").strip()
+    base = request.referrer or url_for("index")
+    # Strip any existing fragment from the base URL
+    base = base.split("#")[0]
+    if tab:
+        return redirect(f"{base}#{tab}")
+    return redirect(base)
+
+
+def get_group_map(state: Dict[str, List[Dict]]) -> Dict[str, Dict]:
+    return {g["id"]: g for g in state.get("groups", [])}
+
+
+def filter_state(state: Dict, group: Optional[str] = None, zone: Optional[str] = None) -> Dict:
+    """Return a shallow copy of state with schedules filtered by group and/or zone.
+
+    Members, zones, groups, and rr are preserved unchanged so that member lookups
+    and round-robin persistence work correctly on the original state.
+    """
+    if not group and not zone:
+        return state
+
+    if group:
+        filtered = [s for s in state.get("schedules", []) if s.get("group") == group]
+    else:
+        zone_group_ids = {g["id"] for g in state.get("groups", []) if g.get("zone_id") == zone}
+        filtered = [s for s in state.get("schedules", []) if s.get("group") in zone_group_ids]
+
+    return {**state, "schedules": filtered}
 
 
 def canonicalize_timezone_name(tz_name: str) -> str:
@@ -137,12 +173,10 @@ def _is_range_schedule(s: Dict) -> bool:
 
 
 def _is_bounded_range_schedule(s: Dict) -> bool:
-    # Range schedule with explicit end time
     return _is_range_schedule(s) and bool(s.get("end_time"))
 
 
 def _is_open_range_schedule(s: Dict) -> bool:
-    # Range schedule without explicit end time
     return _is_range_schedule(s) and not bool(s.get("end_time"))
 
 
@@ -151,13 +185,11 @@ def _generate_events_for_schedule(s: Dict, window_start_utc: datetime, window_en
     if not s.get("active", True):
         return events
 
-    # Legacy cron-only schedule: only start events; shift ends on next start of any schedule
     if "cron" in s and s.get("cron"):
         try:
             tz = ZoneInfo(canonicalize_timezone_name(s["timezone"]))
         except Exception:
             return events
-        # Start iteration a bit before window start to capture an event that may affect active state
         start_minus = window_start_utc - timedelta(days=2)
         base_local = start_minus.astimezone(tz)
         itr = croniter(s["cron"], base_local)
@@ -172,31 +204,30 @@ def _generate_events_for_schedule(s: Dict, window_start_utc: datetime, window_en
             events.append((next_utc, "start", s))
         return events
 
-    # Range-based schedule: start_time, optional end_time, days list, timezone
     if _is_range_schedule(s):
         try:
             tz = ZoneInfo(canonicalize_timezone_name(s["timezone"]))
         except Exception:
             return events
         try:
-            start_t = _parse_time_of_day(s["start_time"])  # required
+            start_t = _parse_time_of_day(s["start_time"])
         except Exception:
             return events
         end_t: Optional[time] = None
         if s.get("end_time"):
             try:
-                end_t = _parse_time_of_day(s["end_time"])  # optional
+                end_t = _parse_time_of_day(s["end_time"])
             except Exception:
                 end_t = None
-        # Days are integers Monday=0 .. Sunday=6
         try:
             days = [int(d) for d in (s.get("days") or [])]
         except Exception:
             days = []
 
-        # Determine local date range to iterate
         local_start = (window_start_utc - timedelta(days=2)).astimezone(tz)
         local_end = (window_end_utc + timedelta(days=1)).astimezone(tz)
+        iteration_floor_utc = datetime(local_start.year, local_start.month, local_start.day, 0, 0, 0, tzinfo=tz).astimezone(timezone.utc)
+        is_overnight = end_t is not None and (end_t.hour, end_t.minute) <= (start_t.hour, start_t.minute)
         cur_date = datetime(local_start.year, local_start.month, local_start.day, 0, 0, 0, tzinfo=tz)
         while cur_date < local_end:
             if cur_date.weekday() in days:
@@ -205,14 +236,27 @@ def _generate_events_for_schedule(s: Dict, window_start_utc: datetime, window_en
                 if start_utc < window_end_utc:
                     events.append((start_utc, "start", s))
                 if end_t is not None:
-                    # If end before start, rolls over to next day
-                    end_day = cur_date
-                    if (end_t.hour, end_t.minute) <= (start_t.hour, start_t.minute):
-                        end_day = cur_date + timedelta(days=1)
+                    end_day = cur_date + timedelta(days=1) if is_overnight else cur_date
                     end_local = datetime(end_day.year, end_day.month, end_day.day, end_t.hour, end_t.minute, tzinfo=tz)
                     end_utc = end_local.astimezone(timezone.utc)
-                    if end_utc > window_start_utc and end_utc < window_end_utc + timedelta(days=1):
+                    if end_utc > iteration_floor_utc and end_utc < window_end_utc + timedelta(days=1):
                         events.append((end_utc, "end", s))
+
+                # Overnight bleed-in: if previous day is NOT a schedule day,
+                # generate a synthetic start+end so the overnight portion
+                # (00:00 to end_time) still shows on this day's timeline.
+                if is_overnight:
+                    prev_day = cur_date - timedelta(days=1)
+                    if prev_day.weekday() not in days:
+                        syn_start_local = datetime(prev_day.year, prev_day.month, prev_day.day, start_t.hour, start_t.minute, tzinfo=tz)
+                        syn_start_utc = syn_start_local.astimezone(timezone.utc)
+                        syn_end_local = datetime(cur_date.year, cur_date.month, cur_date.day, end_t.hour, end_t.minute, tzinfo=tz)
+                        syn_end_utc = syn_end_local.astimezone(timezone.utc)
+                        if syn_start_utc < window_end_utc:
+                            events.append((syn_start_utc, "start", s))
+                        if syn_end_utc > iteration_floor_utc and syn_end_utc < window_end_utc + timedelta(days=1):
+                            events.append((syn_end_utc, "end", s))
+
             cur_date = cur_date + timedelta(days=1)
         return events
 
@@ -231,7 +275,6 @@ def _generate_all_events(state: Dict[str, List[Dict]], window_start_utc: datetim
 
 
 def _determine_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> Tuple[Optional[Dict], Optional[datetime]]:
-    # Generate events around the timestamp and simulate to find the active schedule and its start time
     window_start = at_utc - timedelta(days=2)
     window_end = at_utc + timedelta(seconds=1)
     events = _generate_all_events(state, window_start, window_end)
@@ -244,7 +287,6 @@ def _determine_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> Tupl
             active = sched
             active_started = ts
         elif kind == "end":
-            # Only end the schedule if it is currently active
             if active and active.get("id") == sched.get("id"):
                 active = None
                 active_started = None
@@ -252,12 +294,7 @@ def _determine_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> Tupl
 
 
 def _determine_all_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> Tuple[List[Dict], Optional[datetime]]:
-    """Determine all schedules active at a specific UTC time, allowing overlaps.
-
-    Returns a tuple of (list_of_active_schedules, active_set_started_utc), where
-    active_set_started_utc is when the current composition of the active set last changed.
-    """
-    # Look slightly behind to capture state transitions leading up to this time
+    """Determine all schedules active at a specific UTC time, allowing overlaps."""
     window_start = at_utc - timedelta(days=2)
     window_end = at_utc + timedelta(seconds=1)
     events = _generate_all_events(state, window_start, window_end)
@@ -274,12 +311,10 @@ def _determine_all_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> 
         sid = sched.get("id")
         if kind == "start":
             if is_cron_schedule(sched) or _is_open_range_schedule(sched):
-                # Exclusive models: cron or open-ended range replaces any active set
                 if not (len(active_by_id) == 1 and sid in active_by_id):
                     active_by_id = {sid: sched}
                     last_change = ts
             elif _is_bounded_range_schedule(sched):
-                # Bounded ranges can overlap, but cannot overlap with open-ended ones
                 removed_any = False
                 to_remove = [aid for aid, a in active_by_id.items() if _is_open_range_schedule(a)]
                 for rid in to_remove:
@@ -296,7 +331,6 @@ def _determine_all_active_at(state: Dict[str, List[Dict]], at_utc: datetime) -> 
                 last_change = ts
 
     active_list = list(active_by_id.values())
-    # Provide deterministic ordering by member name for stable UI and round-robin
     member_map = get_member_map(state)
     active_list.sort(key=lambda s: (member_map.get(s.get("member_id"), {}).get("name", ""), s.get("id")))
     return active_list, last_change
@@ -328,20 +362,31 @@ def compute_current_shift(state: Dict[str, List[Dict]], now_utc: Optional[dateti
 def compute_current_overlaps(state: Dict[str, List[Dict]], now_utc: Optional[datetime] = None) -> Tuple[List[Dict], Optional[datetime]]:
     if now_utc is None:
         now_utc = get_now_utc()
-    active_schedules, active_started = _determine_all_active_at(state, now_utc)
-    return active_schedules, active_started
+    active_schedules, _composition_changed = _determine_all_active_at(state, now_utc)
+
+    # Compute when any of the currently active schedules started TODAY
+    # (not when the composition historically changed, which can be days ago)
+    today_start = None
+    if active_schedules:
+        day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        events = _generate_all_events(state, day_start, now_utc + timedelta(seconds=1))
+        active_ids = {s.get("id") for s in active_schedules}
+        for ts, kind, sched in events:
+            if ts > now_utc:
+                break
+            if kind == "start" and sched.get("id") in active_ids:
+                if today_start is None or ts < today_start:
+                    today_start = ts
+
+    return active_schedules, today_start
 
 
 def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: datetime, window_end_utc: datetime) -> List[Dict]:
-    """Compute continuous segments across the window with possibly multiple active schedules.
-
-    Each returned segment is a dict: { start_utc, end_utc, schedules: [schedule, ...] }.
-    """
+    """Compute continuous segments across the window with possibly multiple active schedules."""
     schedules: List[Dict] = [s for s in state.get("schedules", []) if s.get("active", True)]
     if not schedules:
         return []
 
-    # Fetch events and establish initial active set at window start
     events = _generate_all_events(state, window_start_utc - timedelta(days=2), window_end_utc)
 
     active_by_id: Dict[str, Dict] = {}
@@ -354,10 +399,8 @@ def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: da
         sid = sched.get("id")
         if kind == "start":
             if is_cron_schedule(sched) or _is_open_range_schedule(sched):
-                # Exclusive: cron or open-ended range
                 active_by_id = {sid: sched}
             elif _is_bounded_range_schedule(sched):
-                # Bounded ranges can overlap; remove any open-ended ones
                 to_remove = [aid for aid, a in active_by_id.items() if _is_open_range_schedule(a)]
                 for rid in to_remove:
                     del active_by_id[rid]
@@ -400,32 +443,62 @@ def compute_timeline_segments(state: Dict[str, List[Dict]], window_start_utc: da
             "schedules": list(active_by_id.values()),
         })
 
-    # Sort schedules within each segment deterministically by member name
     member_map = get_member_map(state)
     for seg in segments:
         seg["schedules"].sort(key=lambda s: (member_map.get(s.get("member_id"), {}).get("name", ""), s.get("id")))
     return segments
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @app.route("/")
 def index():
     state = load_state()
+    zones = state.get("zones", [])
+    groups = state.get("groups", [])
     members = state.get("members", [])
-    schedules = state.get("schedules", [])
 
-    # Overlapping-aware current members
-    current_schedules, current_started_utc = compute_current_overlaps(state)
-    current_schedule, _single_started, next_schedule, next_start_utc = compute_current_shift(state)
+    selected_zone = request.args.get("zone")
+    selected_group = request.args.get("group")
+
+    # When zones are configured, default to the first zone (no "Global" view)
+    if zones and not selected_zone and not selected_group:
+        selected_zone = zones[0]["id"]
+
+    eval_state = filter_state(state, group=selected_group, zone=selected_zone)
+    schedules = eval_state.get("schedules", [])
+
+    current_schedules, current_started_utc = compute_current_overlaps(eval_state)
+    current_schedule, _single_started, next_schedule, next_start_utc = compute_current_shift(eval_state)
     member_map = get_member_map(state)
 
     current_members = [member_map.get(s.get("member_id")) for s in current_schedules]
     current_member = member_map.get(current_schedule["member_id"]) if current_schedule else None
     next_member = member_map.get(next_schedule["member_id"]) if next_schedule else None
 
+    zone_groups = [g for g in groups if g.get("zone_id") == selected_zone] if selected_zone else groups
+
+    # PTO status: a member is "on PTO" if they have schedules but none are active
+    all_schedules = state.get("schedules", [])
+    members_on_pto = set()
+    for m in members:
+        mid = m["id"]
+        member_scheds = [s for s in all_schedules if s.get("member_id") == mid]
+        if member_scheds and not any(s.get("active", True) for s in member_scheds):
+            members_on_pto.add(mid)
+
     return render_template(
         "index.html",
         members=members,
+        members_on_pto=members_on_pto,
         schedules=schedules,
+        zones=zones,
+        groups=groups,
+        zone_groups=zone_groups,
+        selected_zone=selected_zone,
+        selected_group=selected_group,
         current_member=current_member,
         current_members=current_members,
         current_started_utc=current_started_utc,
@@ -438,8 +511,12 @@ def index():
 @app.route("/api/current_shift", methods=["GET"])
 def api_current_shift():
     state = load_state()
-    current_schedules, current_started_utc = compute_current_overlaps(state)
-    current_schedule, _single_started_utc, next_schedule, next_start_utc = compute_current_shift(state)
+    group_filter = request.args.get("group")
+    zone_filter = request.args.get("zone")
+    eval_state = filter_state(state, group=group_filter, zone=zone_filter)
+
+    current_schedules, current_started_utc = compute_current_overlaps(eval_state)
+    current_schedule, _single_started_utc, next_schedule, next_start_utc = compute_current_shift(eval_state)
     member_map = get_member_map(state)
     current_member = member_map.get(current_schedule["member_id"]) if current_schedule else None
     current_members = [member_map.get(s.get("member_id")) for s in current_schedules]
@@ -458,6 +535,10 @@ def api_current_shift():
     })
 
 
+# ---------------------------------------------------------------------------
+# Member CRUD
+# ---------------------------------------------------------------------------
+
 @app.route("/members/add", methods=["POST"])
 def add_member():
     state = load_state()
@@ -469,8 +550,11 @@ def add_member():
     state["members"] = sorted(state["members"], key=lambda m: m["name"].lower())
     save_state(state)
     logging.info("Added member: %s", name)
-    # Redirect with hint to preselect in Add Schedule form
-    return redirect(url_for("index", new_member_id=new_member["id"]))
+    tab = (request.form.get("_tab") or "").strip()
+    target = url_for("index", new_member_id=new_member["id"])
+    if tab:
+        target += f"#{tab}"
+    return redirect(target)
 
 
 @app.route("/members/delete/<member_id>", methods=["POST"])
@@ -480,14 +564,108 @@ def delete_member(member_id: str):
     state["schedules"] = [s for s in state["schedules"] if s["member_id"] != member_id]
     save_state(state)
     logging.info("Deleted member: %s", member_id)
-    return redirect(url_for("index"))
+    return _redirect_back()
 
+
+@app.route("/members/delete", methods=["POST"])
+def delete_members_bulk():
+    """Bulk delete members and their schedules."""
+    state = load_state()
+    ids = set(request.form.getlist("member_ids"))
+    if not ids:
+        return _redirect_back()
+    before_m = len(state.get("members", []))
+    state["members"] = [m for m in state.get("members", []) if m.get("id") not in ids]
+    state["schedules"] = [s for s in state.get("schedules", []) if s.get("member_id") not in ids]
+    save_state(state)
+    after_m = len(state.get("members", []))
+    logging.info("Bulk deleted %d members and their schedules", before_m - after_m)
+    return _redirect_back()
+
+
+@app.route("/members/toggle_schedules/<member_id>", methods=["POST"])
+def toggle_member_schedules(member_id: str):
+    """Activate or deactivate all schedules for a member (PTO management).
+
+    **PTO On** (active=false): deactivates all of the member's schedules.
+
+    **PTO Off** (active=true): smart reactivation — only activates schedules
+    where the member has priority 1, or where no higher-priority person has an
+    active schedule in the same group.
+    """
+    state = load_state()
+    active_param = (request.form.get("active") or "").strip().lower()
+    active_value = active_param in ("1", "true", "on", "yes")
+    group_filter = request.form.get("group", "").strip() or None
+    all_schedules = state.get("schedules", [])
+
+    member_map = get_member_map(state)
+    member = member_map.get(member_id, {})
+    member_name = member.get("name", member_id)
+
+    activated = 0
+    skipped = 0
+
+    for s in all_schedules:
+        if s.get("member_id") != member_id:
+            continue
+        if group_filter and s.get("group") != group_filter:
+            continue
+
+        if not active_value:
+            # PTO On — deactivate everything
+            s["active"] = False
+            activated += 1
+        else:
+            # PTO Off — smart reactivation
+            my_priority = s.get("priority") or 1
+            if my_priority == 1:
+                s["active"] = True
+                activated += 1
+            else:
+                grp = s.get("group")
+                higher_active = any(
+                    other.get("active")
+                    and other.get("group") == grp
+                    and other.get("member_id") != member_id
+                    and (other.get("priority") or 1) < my_priority
+                    for other in all_schedules
+                )
+                if higher_active:
+                    skipped += 1
+                else:
+                    s["active"] = True
+                    activated += 1
+
+    save_state(state)
+    action = "deactivated" if not active_value else "activated"
+    logging.info("PTO %s for %s: %d %s, %d skipped (group=%s)",
+                 "On" if not active_value else "Off", member_name, activated, action, skipped, group_filter)
+
+    if request.accept_mimetypes.best == "application/json" or request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({
+            "ok": True,
+            "member_id": member_id,
+            "member_name": member_name,
+            "active": active_value,
+            "count": activated,
+            "skipped": skipped,
+        })
+    return _redirect_back()
+
+
+# ---------------------------------------------------------------------------
+# Schedule CRUD
+# ---------------------------------------------------------------------------
 
 @app.route("/schedule/add", methods=["POST"])
 def add_schedule():
     state = load_state()
     timezone_name = request.form.get("timezone", "UTC").strip() or "UTC"
     member_id = request.form.get("member_id", "").strip()
+    group = request.form.get("group", "").strip() or None
+    priority_raw = request.form.get("priority", "").strip()
+    priority = int(priority_raw) if priority_raw else None
 
     if not member_id:
         return "member_id required", 400
@@ -497,13 +675,11 @@ def add_schedule():
     except Exception as e:
         return f"Invalid timezone: {e}", 400
 
-    # New range-based inputs
     start_time = (request.form.get("start_time") or "").strip()
     end_time = (request.form.get("end_time") or "").strip()
-    days = request.form.getlist("days")  # list of strings like ["0", "1", ...]
+    days = request.form.getlist("days")
 
     if start_time:
-        # Range-based schedule
         try:
             _ = _parse_time_of_day(start_time)
             if end_time:
@@ -526,13 +702,14 @@ def add_schedule():
             "days": days_int,
             "timezone": canonical_tz,
             "active": True,
+            "group": group,
+            "priority": priority,
         }
         state["schedules"].append(new_schedule)
         save_state(state)
-        logging.info("Added range schedule: %s %s-%s (%s) days=%s", member_id, start_time, end_time or "", canonical_tz, days_int)
-        return redirect(url_for("index"))
+        logging.info("Added range schedule: %s %s-%s (%s) days=%s group=%s p=%s", member_id, start_time, end_time or "", canonical_tz, days_int, group, priority)
+        return _redirect_back()
 
-    # Fallback for legacy cron input (still supported if provided by API or older UI)
     cron = request.form.get("cron", "").strip()
     if not cron:
         return "start_time or cron required", 400
@@ -547,11 +724,13 @@ def add_schedule():
         "cron": cron,
         "timezone": canonical_tz,
         "active": True,
+        "group": group,
+        "priority": priority,
     }
     state["schedules"].append(new_schedule)
     save_state(state)
-    logging.info("Added cron schedule: %s (%s)", cron, canonical_tz)
-    return redirect(url_for("index"))
+    logging.info("Added cron schedule: %s (%s) group=%s p=%s", cron, canonical_tz, group, priority)
+    return _redirect_back()
 
 
 @app.route("/schedule/delete/<schedule_id>", methods=["POST"])
@@ -560,7 +739,7 @@ def delete_schedule(schedule_id: str):
     state["schedules"] = [s for s in state["schedules"] if s["id"] != schedule_id]
     save_state(state)
     logging.info("Deleted schedule: %s", schedule_id)
-    return redirect(url_for("index"))
+    return _redirect_back()
 
 
 @app.route("/schedule/delete", methods=["POST"])
@@ -569,20 +748,18 @@ def delete_schedules_bulk():
     state = load_state()
     ids = request.form.getlist("schedule_ids")
     if not ids:
-        return redirect(url_for("index"))
+        return _redirect_back()
     before = len(state.get("schedules", []))
     state["schedules"] = [s for s in state.get("schedules", []) if s.get("id") not in ids]
     save_state(state)
     after = len(state.get("schedules", []))
     logging.info("Bulk deleted %d schedules", before - after)
-    return redirect(url_for("index"))
+    return _redirect_back()
 
 
 @app.route("/schedule/set_active/<schedule_id>", methods=["POST"])
 def set_schedule_active(schedule_id: str):
-    """Set a schedule's active flag from form field 'active' ("true"/"false" or on/off).
-    Returns JSON for fetch-based UI or redirects for graceful fallback.
-    """
+    """Set a schedule's active flag."""
     state = load_state()
     active_param = (request.form.get("active") or request.args.get("active") or "").strip().lower()
     active_value = active_param in ("1", "true", "on", "yes")
@@ -597,17 +774,89 @@ def set_schedule_active(schedule_id: str):
         save_state(state)
         logging.info("Set schedule %s active=%s", schedule_id, active_value)
 
-    # If request prefers JSON (fetch), respond JSON; else redirect
     if request.accept_mimetypes.best == "application/json" or request.headers.get("X-Requested-With") == "fetch":
         return jsonify({"ok": updated, "schedule_id": schedule_id, "active": active_value})
-    return redirect(url_for("index"))
+    return _redirect_back()
+
+
+# ---------------------------------------------------------------------------
+# Zone / Group CRUD
+# ---------------------------------------------------------------------------
+
+@app.route("/zones/add", methods=["POST"])
+def add_zone():
+    state = load_state()
+    name = request.form.get("name", "").strip()
+    if not name:
+        return "Name required", 400
+    zone_id = request.form.get("id", "").strip() or name.lower().replace(" ", "-")
+    zones = state.setdefault("zones", [])
+    if any(z["id"] == zone_id for z in zones):
+        return f"Zone '{zone_id}' already exists", 400
+    zones.append({"id": zone_id, "name": name})
+    save_state(state)
+    logging.info("Added zone: %s (%s)", name, zone_id)
+    return _redirect_back()
+
+
+@app.route("/zones/delete/<zone_id>", methods=["POST"])
+def delete_zone(zone_id: str):
+    state = load_state()
+    state["zones"] = [z for z in state.get("zones", []) if z["id"] != zone_id]
+    removed_groups = {g["id"] for g in state.get("groups", []) if g.get("zone_id") == zone_id}
+    state["groups"] = [g for g in state.get("groups", []) if g.get("zone_id") != zone_id]
+    for s in state.get("schedules", []):
+        if s.get("group") in removed_groups:
+            s["group"] = None
+    save_state(state)
+    logging.info("Deleted zone: %s (and %d groups)", zone_id, len(removed_groups))
+    return _redirect_back()
+
+
+@app.route("/groups/add", methods=["POST"])
+def add_group():
+    state = load_state()
+    name = request.form.get("name", "").strip()
+    zone_id = request.form.get("zone_id", "").strip() or None
+    if not name:
+        return "Name required", 400
+    group_id = request.form.get("id", "").strip() or name.lower().replace(" ", "-")
+    groups = state.setdefault("groups", [])
+    if any(g["id"] == group_id for g in groups):
+        return f"Group '{group_id}' already exists", 400
+    groups.append({"id": group_id, "name": name, "zone_id": zone_id})
+    save_state(state)
+    logging.info("Added group: %s (%s) zone=%s", name, group_id, zone_id)
+    return _redirect_back()
+
+
+@app.route("/groups/delete/<group_id>", methods=["POST"])
+def delete_group(group_id: str):
+    state = load_state()
+    state["groups"] = [g for g in state.get("groups", []) if g["id"] != group_id]
+    for s in state.get("schedules", []):
+        if s.get("group") == group_id:
+            s["group"] = None
+    save_state(state)
+    logging.info("Deleted group: %s", group_id)
+    return _redirect_back()
+
+
+# ---------------------------------------------------------------------------
+# Shift API (consumed by servicenow_autoassign)
+# ---------------------------------------------------------------------------
 
 @app.route("/api/shift", methods=["GET"])
 def api_shift():
     state = load_state()
+    group_filter = request.args.get("group")
+    zone_filter = request.args.get("zone")
+    eval_state = filter_state(state, group=group_filter, zone=zone_filter)
+
     now_utc = get_now_utc()
-    active_schedules, active_set_started = _determine_all_active_at(state, now_utc)
+    active_schedules, active_set_started = _determine_all_active_at(eval_state, now_utc)
     member_map = get_member_map(state)
+
     if not active_schedules:
         return jsonify({
             "id": None,
@@ -626,8 +875,8 @@ def api_shift():
             "round_robin": False,
         })
 
-    # Round-robin over the overlapping active schedules
-    # Build stable ordering (already sorted by member name in _determine_all_active_at)
+    # Round-robin over overlapping active schedules.
+    # rr state is persisted to the original (unfiltered) state.
     group_key_part = "|".join([s.get("id") for s in active_schedules])
     group_time = (active_set_started.isoformat() if active_set_started else "")
     group_key = f"{group_time}|{group_key_part}"
@@ -649,37 +898,22 @@ def api_shift():
     })
 
 
-@app.route("/members/delete", methods=["POST"])
-def delete_members_bulk():
-    """Bulk delete members and their schedules. Form field 'member_ids'."""
-    state = load_state()
-    ids = set(request.form.getlist("member_ids"))
-    if not ids:
-        return redirect(url_for("index"))
-    before_m = len(state.get("members", []))
-    state["members"] = [m for m in state.get("members", []) if m.get("id") not in ids]
-    # Remove schedules belonging to deleted members
-    state["schedules"] = [s for s in state.get("schedules", []) if s.get("member_id") not in ids]
-    save_state(state)
-    after_m = len(state.get("members", []))
-    logging.info("Bulk deleted %d members and their schedules", before_m - after_m)
-    return redirect(url_for("index"))
-
+# ---------------------------------------------------------------------------
+# Timeline API
+# ---------------------------------------------------------------------------
 
 @app.route("/api/timeline", methods=["GET"])
 def api_timeline():
-    """Return 24h timeline segments for a given timezone (default UTC) and date.
-
-    Query params:
-      - tz: IANA timezone or supported abbreviation, default 'UTC'
-      - date: YYYY-MM-DD in the provided timezone; defaults to today in tz
-    """
+    """Return 24h timeline segments, optionally filtered by group or zone."""
     state = load_state()
+    group_filter = request.args.get("group")
+    zone_filter = request.args.get("zone")
+    eval_state = filter_state(state, group=group_filter, zone=zone_filter)
+
     tz_param = request.args.get("tz", "UTC").strip() or "UTC"
     tz_name = canonicalize_timezone_name(tz_param)
     tz = ZoneInfo(tz_name)
 
-    # Determine local day
     date_param = request.args.get("date")
     if date_param:
         try:
@@ -695,7 +929,7 @@ def api_timeline():
     window_start_utc = local_start.astimezone(timezone.utc)
     window_end_utc = local_end.astimezone(timezone.utc)
 
-    segments = compute_timeline_segments(state, window_start_utc, window_end_utc)
+    segments = compute_timeline_segments(eval_state, window_start_utc, window_end_utc)
     member_map = get_member_map(state)
 
     def seg_to_json(seg: Dict) -> Dict:
@@ -719,6 +953,26 @@ def api_timeline():
         },
         "segments": [seg_to_json(seg) for seg in segments]
     })
+
+
+# ---------------------------------------------------------------------------
+# Data API (for external integrations)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/zones", methods=["GET"])
+def api_zones():
+    state = load_state()
+    return jsonify(state.get("zones", []))
+
+
+@app.route("/api/groups", methods=["GET"])
+def api_groups():
+    state = load_state()
+    zone = request.args.get("zone")
+    groups = state.get("groups", [])
+    if zone:
+        groups = [g for g in groups if g.get("zone_id") == zone]
+    return jsonify(groups)
 
 
 if __name__ == "__main__":

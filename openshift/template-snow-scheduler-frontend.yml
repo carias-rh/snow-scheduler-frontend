@@ -216,7 +216,7 @@ objects:
   - apiVersion: v1
     kind: Service
     metadata:
-      name: ${FRONTEND_APP_NAME}-${TEAM}
+      name: ${TEAM}-${FRONTEND_APP_NAME}
       labels:
         app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
@@ -238,10 +238,10 @@ objects:
         app: ${FRONTEND_APP_NAME}
         team: ${TEAM}
     spec:
-      host: ${FRONTEND_APP_NAME}-${TEAM}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
+      host: ${TEAM}-${FRONTEND_APP_NAME}.apps.tools-na100.dev.ole.redhat.com
       to:
         kind: Service
-        name: ${FRONTEND_APP_NAME}-${TEAM}
+        name: ${TEAM}-${FRONTEND_APP_NAME}
       port:
         targetPort: http
       tls:
@@ -262,7 +262,7 @@ objects:
     kind: BuildConfig
     metadata:
       annotations:
-        app.openshift.io/vcs-ref: redesign/snow-auto-assign
+        app.openshift.io/vcs-ref: feature/snow-autoassign-cx
         app.openshift.io/vcs-uri: 'git@github.com:carias-rh/lx-toolbox.git'
         openshift.io/generated-by: OpenShiftWebConsole
       resourceVersion: '535553802'
@@ -296,10 +296,8 @@ objects:
       source:
         type: Git
         git:
-          uri: 'git@github.com:carias-rh/lx-toolbox.git'
-          ref: redesign/snow-auto-assign
-        sourceSecret:
-          name: lx-toolbox
+          uri: https://github.com/carias-rh/lx-toolbox.git
+          ref: feature/snow-autoassign-cx
       triggers:
         - type: Generic
           generic:
@@ -342,11 +340,11 @@ objects:
 
         FRONTEND_OPENSHIFT_ROUTE=https://${FRONTEND_APP_NAME}-${TEAM}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
 
-        ${TEAM}_ASSIGNMENT_GROUP_ID=${ASSIGNMENT_GROUP_ID}
+        $ASSIGNMENT_GROUP_ID=${ASSIGNMENT_GROUP_ID}
 
         SNOW_GROUPS_CONFIG=${SNOW_GROUPS_CONFIG}
 
-        ${TEAM}_ACKNOWLEDGMENT_TEMPLATE=${ACKNOWLEDGMENT_TEMPLATE}
+        $ACKNOWLEDGMENT_TEMPLATE=${ACKNOWLEDGMENT_TEMPLATE}
 
       SNOW_GROUPS_CONFIG: "${SNOW_GROUPS_CONFIG}"
 
@@ -394,7 +392,7 @@ objects:
                 - '-c'
                 - >-
                   cp ./config/config.ini.example ./config/config.ini ;
-                  ./scripts/lx-tool snow assign ${TEAM} --continuous --interval ${AUTOASSIGN_INTERVAL_SECONDS}
+                  python -m lx_toolbox.main snow assign ${TEAM} --continuous --interval ${AUTOASSIGN_INTERVAL_SECONDS}
               resources: {}
               volumeMounts:
                 - name: env-file

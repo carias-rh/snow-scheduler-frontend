@@ -338,7 +338,7 @@ objects:
 
         # ${TEAM} Team Configuration
 
-        FRONTEND_OPENSHIFT_ROUTE=https://${FRONTEND_APP_NAME}-${TEAM}-${NAMESPACE}.apps.tools-na100.dev.ole.redhat.com
+        FRONTEND_OPENSHIFT_ROUTE=https://${TEAM}-${FRONTEND_APP_NAME}.apps.tools-na100.dev.ole.redhat.com
 
         $ASSIGNMENT_GROUP_ID=${ASSIGNMENT_GROUP_ID}
 

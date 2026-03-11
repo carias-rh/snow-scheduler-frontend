@@ -133,7 +133,8 @@ objects:
       name: ${FRONTEND_APP_NAME}-${TEAM}-data
       labels:
         app: ${FRONTEND_APP_NAME}
-        team: ${TEAM}
+      annotations:
+        openshift.io/description: "Persistent state for ${TEAM} shift scheduler. Do not delete."
     spec:
       accessModes:
         - ReadWriteOnce

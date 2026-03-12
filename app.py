@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -937,6 +938,26 @@ def edit_schedule(schedule_id: str):
     save_state(state)
     logging.info("Edited schedule %s: cron %s (%s) group=%s p=%s",
                  schedule_id, cron, canonical_tz, group, priority)
+    return _redirect_back()
+
+
+@app.route("/schedule/duplicate/<schedule_id>", methods=["POST"])
+def duplicate_schedule(schedule_id: str):
+    """Create a copy of an existing schedule with a new id."""
+    state = load_state()
+    source = None
+    for s in state.get("schedules", []):
+        if s.get("id") == schedule_id:
+            source = s
+            break
+    if source is None:
+        return "Schedule not found", 404
+
+    new_schedule = copy.deepcopy(source)
+    new_schedule["id"] = str(uuid.uuid4())
+    state["schedules"].append(new_schedule)
+    save_state(state)
+    logging.info("Duplicated schedule %s → %s", schedule_id, new_schedule["id"])
     return _redirect_back()
 
 

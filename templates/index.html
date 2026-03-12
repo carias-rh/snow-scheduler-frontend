@@ -104,11 +104,21 @@
           <th>Days</th>
           <th>Timezone</th>
           <th>Active</th>
+          <th style="width:100px">Actions</th>
         </tr>
       </thead>
       <tbody>
       {% for s in rows %}
-        <tr class="schedule-row{% if not s.active %} is-inactive{% endif %}">
+        <tr class="schedule-row{% if not s.active %} is-inactive{% endif %}"
+            data-sched-id="{{ s.id }}"
+            data-member-id="{{ s.member_id }}"
+            data-group="{{ s.group or '' }}"
+            data-priority="{{ s.priority or '' }}"
+            data-start-time="{{ s.start_time or '' }}"
+            data-end-time="{{ s.end_time or '' }}"
+            data-days="{{ (s.days or [])|join(',') }}"
+            data-cron="{{ s.cron or '' }}"
+            data-timezone="{{ s.timezone or 'UTC' }}">
           <td style="text-align:center"><input type="checkbox" name="schedule_ids" value="{{ s.id }}" aria-label="Select" /></td>
           <td>{% set m = (members | selectattr('id','equalto', s.member_id) | list | first) %}{{ m.name if m else 'Unknown' }}</td>
           {% if show_group %}
@@ -125,6 +135,11 @@
           <td>{% if s.cron %}—{% else %}{% set day_names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}{% for d in s.days %}{{ day_names[d] }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</td>
           <td>{{ s.timezone }}</td>
           <td style="text-align:center"><input type="checkbox" class="toggle-active" data-id="{{ s.id }}" {% if s.active %}checked{% endif %} aria-label="Toggle active" /></td>
+          <td class="actions-cell">
+            <button type="button" class="btn-sm btn-outline btn-edit-sched" title="Edit schedule" aria-label="Edit schedule">&#9998;</button>
+            <button type="button" class="btn-sm btn-outline btn-dup-sched" data-dup-id="{{ s.id }}" title="Duplicate schedule" aria-label="Duplicate schedule">&#10697;</button>
+            <button type="button" class="btn-sm btn-danger btn-delete-sched" data-delete-id="{{ s.id }}" title="Delete schedule" aria-label="Delete schedule">&#128465;</button>
+          </td>
         </tr>
       {% endfor %}
       </tbody>
@@ -134,10 +149,14 @@
   {# ════════════ Schedules view ════════════ #}
   <section id="view-schedules" role="region" aria-labelledby="nav-schedules">
 
+  {# Hidden forms used by per-row action buttons #}
+  <form id="single-delete-sched-form" method="post" action="" style="display:none"></form>
+  <form id="single-dup-sched-form" method="post" action="" style="display:none"></form>
+
   <rh-card>
     <h2 slot="heading">Schedules</h2>
     {% if schedules|length == 0 %}
-      <p>No schedules{% if selected_group %} for this group{% elif selected_zone %} for this zone{% endif %}. Add one below.</p>
+      <p>No schedules{% if selected_group %} for this group{% elif selected_zone %} for this zone{% endif %}.</p>
     {% elif selected_zone and not selected_group and zone_groups|length > 0 %}
       {# "All groups" mode — one table per group #}
       <form method="post" action="/schedule/delete">
@@ -154,45 +173,54 @@
           <h3 style="margin-top:var(--rhds-space-400)">Ungrouped</h3>
           {{ schedule_table(orphan_schedules, false) }}
         {% endif %}
-        <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
-          <button type="submit" id="delete-selected-schedules" disabled>Delete selected</button>
+        <div class="schedule-toolbar">
+          <button type="submit" id="delete-selected-schedules" class="btn-danger" disabled>Delete selected</button>
+          <button type="button" id="btn-add-schedule" class="btn-add-sched">+ Add Schedule</button>
         </div>
       </form>
     {% else %}
       {# Single group selected, or no zones — single table #}
       <form method="post" action="/schedule/delete">
         {{ schedule_table(schedules, zones|length > 0 and not selected_group) }}
-        <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
-          <button type="submit" id="delete-selected-schedules" disabled>Delete selected</button>
+        <div class="schedule-toolbar">
+          <button type="submit" id="delete-selected-schedules" class="btn-danger" disabled>Delete selected</button>
+          <button type="button" id="btn-add-schedule" class="btn-add-sched">+ Add Schedule</button>
         </div>
       </form>
     {% endif %}
+    {% if schedules|length == 0 %}
+    <div class="schedule-toolbar">
+      <button type="button" id="btn-add-schedule" class="btn-add-sched">+ Add Schedule</button>
+    </div>
+    {% endif %}
   </rh-card>
 
-  <rh-card class="spaced-section">
-    <h3 class="section-spacer" slot="heading">Add Schedule</h3>
-    <form method="post" action="/schedule/add">
+  {# ── Shared Add / Edit schedule dialog ── #}
+  <dialog id="sched-dialog" class="sched-dialog">
+    <form method="post" id="sched-dialog-form" action="/schedule/add">
+      <h3 id="sched-dialog-title">Add Schedule</h3>
+      <input type="hidden" name="schedule_id" id="sched-dialog-id" value="" />
+
       <label>Member
-        <select name="member_id" required>
-          <option value="" disabled {% if not new_member_id %}selected{% endif %}>Select member</option>
+        <select name="member_id" id="sched-dlg-member" required>
+          <option value="" disabled selected>Select member</option>
           {% for m in members %}
-          <option value="{{ m.id }}" {% if new_member_id and m.id == new_member_id %}selected{% endif %}>{{ m.name }}</option>
+          <option value="{{ m.id }}">{{ m.name }}</option>
           {% endfor %}
         </select>
       </label>
 
       {% if groups|length > 0 %}
       <label>Group
-        <select name="group">
+        <select name="group" id="sched-dlg-group">
           <option value="">— Global (no group) —</option>
           {% for z in zones %}
             <optgroup label="{{ z.name }}">
               {% for g in groups if g.zone_id == z.id %}
-                <option value="{{ g.id }}" {% if selected_group and selected_group == g.id %}selected{% endif %}>{{ g.name }}</option>
+                <option value="{{ g.id }}">{{ g.name }}</option>
               {% endfor %}
             </optgroup>
           {% endfor %}
-          {# groups without a zone #}
           {% set orphan_groups = groups | selectattr('zone_id', 'none') | list %}
           {% if orphan_groups|length > 0 %}
             <optgroup label="Ungrouped">
@@ -206,16 +234,16 @@
       {% endif %}
 
       <label>Priority (optional)
-        <input name="priority" type="number" min="1" max="9" placeholder="e.g. 1, 2, 3" style="width:120px" />
+        <input name="priority" id="sched-dlg-priority" type="number" min="1" max="9" placeholder="e.g. 1, 2, 3" style="width:120px" />
       </label>
 
       <label>Start time
-        <input name="start_time" type="time" required />
+        <input name="start_time" id="sched-dlg-start" type="time" />
       </label>
       <label>End time (optional)
-        <input name="end_time" type="time" />
+        <input name="end_time" id="sched-dlg-end" type="time" />
       </label>
-      <fieldset style="border:0; padding:0; margin: 8px 0">
+      <fieldset style="border:0; padding:0; margin: 8px 0" id="sched-dlg-days">
         <legend class="sr-only">Days of week</legend>
         <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="0" checked /> Mon</label>
         <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="1" checked /> Tue</label>
@@ -226,17 +254,26 @@
         <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="6" /> Sun</label>
       </fieldset>
       <label>Timezone
-        <input name="timezone" type="text" placeholder="IANA (e.g., Europe/Berlin, America/New_York) or abbr (IST)" value="UTC" />
+        <input name="timezone" id="sched-dlg-tz" type="text" placeholder="IANA (e.g., Europe/Berlin) or abbr (IST)" value="UTC" />
       </label>
-      <button type="submit">Add</button>
       <p class="hint">If end time is empty, the shift ends when the next shift starts. Only shifts with both start and end times can overlap.</p>
-      <p class="hint">Timezone examples: <code>UTC</code>, <code>Europe/Berlin</code>, <code>America/New_York</code>, <code>Asia/Kolkata</code> (abbr: <code>IST</code>)</p>
+      <div class="dialog-buttons">
+        <button type="submit" id="sched-dlg-submit">Add</button>
+        <button type="button" id="sched-dlg-cancel" class="btn-outline">Cancel</button>
+      </div>
     </form>
-  </rh-card>
+  </dialog>
+
   </section>
 
   {# ════════════ Members view ════════════ #}
   <section id="view-members" role="region" aria-labelledby="nav-members" hidden>
+    {# Hidden forms for per-row member actions #}
+    <form id="single-delete-member-form" method="post" action="" style="display:none"></form>
+    <form id="rename-member-form" method="post" action="" style="display:none">
+      <input type="hidden" name="name" id="rename-member-name" />
+    </form>
+
     <rh-card>
       <h2 slot="heading">Members</h2>
       {% if members|length == 0 %}
@@ -246,9 +283,18 @@
           <div id="members-caption" class="sr-only">Select members to delete</div>
           <ul style="list-style:none; padding-left:0; margin:0">
             {% for m in members %}
-            <li class="member-row">
+            <li class="member-row" data-member-id="{{ m.id }}">
               <input type="checkbox" name="member_ids" value="{{ m.id }}" aria-label="Select member {{ m.name }}" />
-              <span class="member-name">{{ m.name }}</span>
+              <span class="member-name" data-original="{{ m.name }}">{{ m.name }}</span>
+              <span class="member-edit-controls" style="display:none">
+                <input type="text" class="member-edit-input" value="{{ m.name }}" aria-label="New name" />
+                <button type="button" class="btn-sm btn-member-save" title="Save">&#10003;</button>
+                <button type="button" class="btn-sm btn-outline btn-member-cancel" title="Cancel">&#10005;</button>
+              </span>
+              <span class="member-actions">
+                <button type="button" class="btn-sm btn-outline btn-edit-member" title="Rename member" aria-label="Rename {{ m.name }}">&#9998;</button>
+                <button type="button" class="btn-sm btn-danger btn-delete-member" data-delete-id="{{ m.id }}" data-delete-name="{{ m.name }}" title="Delete member" aria-label="Delete {{ m.name }}">&#128465;</button>
+              </span>
               <label class="pto-switch" title="Toggle PTO for {{ m.name }}">
                 <input type="checkbox" class="pto-toggle" data-pto-member="{{ m.id }}" data-pto-name="{{ m.name }}" {% if m.id in members_on_pto %}checked{% endif %} />
                 <span class="pto-slider"></span>
@@ -258,7 +304,7 @@
             {% endfor %}
           </ul>
           <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
-            <button type="submit" id="delete-selected-members" disabled>Delete selected</button>
+            <button type="submit" id="delete-selected-members" class="btn-danger" disabled>Delete selected</button>
           </div>
         </form>
       {% endif %}
@@ -317,8 +363,7 @@
         const wStart = new Date(data.window.start_utc).getTime();
         const wEnd = new Date(data.window.end_utc).getTime();
 
-        // Build per-member intervals from segments
-        const memberIntervals = new Map(); // id → { name, intervals: [{left,width,startH,endH}] }
+        const memberIntervals = new Map();
         const memberIdToColor = new Map();
         let colorIndex = 0;
 
@@ -341,7 +386,6 @@
           });
         });
 
-        // Merge adjacent intervals per member for cleaner rendering
         function mergeIntervals(intervals) {
           if (!intervals.length) return intervals;
           intervals.sort((a, b) => a.left - b.left);
@@ -377,7 +421,6 @@
           row.appendChild(track);
           lanes.appendChild(row);
         } else {
-          // Sort members alphabetically
           const sorted = [...memberIntervals.values()].sort((a, b) => a.name.localeCompare(b.name));
           sorted.forEach(member => {
             const color = hslaForIndex(memberIdToColor.get(member.id));
@@ -405,7 +448,6 @@
           });
         }
 
-        // Hour ticks
         for (let h = 0; h <= 24; h += 3) {
           const tickTime = wStart + h * 60 * 60 * 1000;
           const left = Math.max(0, Math.min(100, percentBetween(tickTime, wStart, wEnd)));
@@ -459,7 +501,192 @@
         } catch (e) { /* silent */ }
       }
 
-      // Select-all + enable/disable logic
+      function submitWithTab(form) {
+        const hash = window.location.hash;
+        if (hash) {
+          let input = form.querySelector('input[name="_tab"]');
+          if (!input) {
+            input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = '_tab';
+            form.appendChild(input);
+          }
+          input.value = hash.replace('#', '');
+        }
+        form.submit();
+      }
+
+      // ── Schedule dialog (Add / Edit) ──
+      const schedDialog = document.getElementById('sched-dialog');
+      const schedForm = document.getElementById('sched-dialog-form');
+      const schedTitle = document.getElementById('sched-dialog-title');
+      const schedIdField = document.getElementById('sched-dialog-id');
+      const schedSubmitBtn = document.getElementById('sched-dlg-submit');
+      const defaultSelectedGroup = '{{ selected_group or "" }}';
+
+      function resetScheduleDialog() {
+        schedForm.reset();
+        schedIdField.value = '';
+        schedForm.action = '/schedule/add';
+        schedTitle.textContent = 'Add Schedule';
+        schedSubmitBtn.textContent = 'Add';
+        const memberSel = document.getElementById('sched-dlg-member');
+        if (memberSel) memberSel.value = '';
+        const groupSel = document.getElementById('sched-dlg-group');
+        if (groupSel) groupSel.value = defaultSelectedGroup;
+        const tzInput = document.getElementById('sched-dlg-tz');
+        if (tzInput) tzInput.value = 'UTC';
+        // Restore default weekday checks (Mon-Fri)
+        document.querySelectorAll('#sched-dlg-days input[name="days"]').forEach(cb => {
+          cb.checked = parseInt(cb.value) < 5;
+        });
+      }
+
+      function openScheduleDialog(row) {
+        if (!row) {
+          resetScheduleDialog();
+          schedDialog.showModal();
+          return;
+        }
+        const id = row.dataset.schedId;
+        schedIdField.value = id;
+        schedForm.action = `/schedule/edit/${encodeURIComponent(id)}`;
+        schedTitle.textContent = 'Edit Schedule';
+        schedSubmitBtn.textContent = 'Save';
+
+        const memberSel = document.getElementById('sched-dlg-member');
+        if (memberSel) memberSel.value = row.dataset.memberId || '';
+        const groupSel = document.getElementById('sched-dlg-group');
+        if (groupSel) groupSel.value = row.dataset.group || '';
+        const prioInput = document.getElementById('sched-dlg-priority');
+        if (prioInput) prioInput.value = row.dataset.priority || '';
+        const startInput = document.getElementById('sched-dlg-start');
+        if (startInput) startInput.value = row.dataset.startTime || '';
+        const endInput = document.getElementById('sched-dlg-end');
+        if (endInput) endInput.value = row.dataset.endTime || '';
+        const tzInput = document.getElementById('sched-dlg-tz');
+        if (tzInput) tzInput.value = row.dataset.timezone || 'UTC';
+
+        const daysStr = row.dataset.days || '';
+        const activeDays = daysStr ? daysStr.split(',') : [];
+        document.querySelectorAll('#sched-dlg-days input[name="days"]').forEach(cb => {
+          cb.checked = activeDays.includes(cb.value);
+        });
+
+        schedDialog.showModal();
+      }
+
+      // "+ Add Schedule" buttons (there may be one per branch)
+      document.querySelectorAll('#btn-add-schedule, .btn-add-sched').forEach(btn => {
+        btn.addEventListener('click', () => openScheduleDialog(null));
+      });
+
+      // Per-row Edit buttons
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-edit-sched');
+        if (!btn) return;
+        const row = btn.closest('tr[data-sched-id]');
+        if (row) openScheduleDialog(row);
+      });
+
+      // Cancel button inside dialog
+      document.getElementById('sched-dlg-cancel').addEventListener('click', () => {
+        schedDialog.close();
+      });
+
+      // Close on backdrop click
+      schedDialog.addEventListener('click', (e) => {
+        if (e.target === schedDialog) schedDialog.close();
+      });
+
+      // Per-row Delete buttons for schedules
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-delete-sched');
+        if (!btn) return;
+        const id = btn.dataset.deleteId;
+        if (!id) return;
+        if (!confirm('Delete this schedule?')) return;
+        const form = document.getElementById('single-delete-sched-form');
+        form.action = `/schedule/delete/${encodeURIComponent(id)}`;
+        submitWithTab(form);
+      });
+
+      // Per-row Duplicate buttons for schedules
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-dup-sched');
+        if (!btn) return;
+        const id = btn.dataset.dupId;
+        if (!id) return;
+        const form = document.getElementById('single-dup-sched-form');
+        form.action = `/schedule/duplicate/${encodeURIComponent(id)}`;
+        submitWithTab(form);
+      });
+
+      // ── Member inline edit ──
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-edit-member');
+        if (!btn) return;
+        const row = btn.closest('.member-row');
+        if (!row) return;
+        const nameSpan = row.querySelector('.member-name');
+        const editCtrl = row.querySelector('.member-edit-controls');
+        const actions = row.querySelector('.member-actions');
+        const input = row.querySelector('.member-edit-input');
+        nameSpan.style.display = 'none';
+        actions.style.display = 'none';
+        editCtrl.style.display = 'inline-flex';
+        input.value = nameSpan.dataset.original;
+        input.focus();
+        input.select();
+      });
+
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-member-cancel');
+        if (!btn) return;
+        const row = btn.closest('.member-row');
+        if (!row) return;
+        row.querySelector('.member-name').style.display = '';
+        row.querySelector('.member-actions').style.display = '';
+        row.querySelector('.member-edit-controls').style.display = 'none';
+      });
+
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-member-save');
+        if (!btn) return;
+        const row = btn.closest('.member-row');
+        if (!row) return;
+        const memberId = row.dataset.memberId;
+        const newName = row.querySelector('.member-edit-input').value.trim();
+        if (!newName) return;
+        const form = document.getElementById('rename-member-form');
+        form.action = `/members/edit/${encodeURIComponent(memberId)}`;
+        document.getElementById('rename-member-name').value = newName;
+        submitWithTab(form);
+      });
+
+      // Submit member rename on Enter key
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const input = e.target.closest('.member-edit-input');
+        if (!input) return;
+        e.preventDefault();
+        const row = input.closest('.member-row');
+        if (row) row.querySelector('.btn-member-save').click();
+      });
+
+      // Per-row Delete buttons for members
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-delete-member');
+        if (!btn) return;
+        const id = btn.dataset.deleteId;
+        const name = btn.dataset.deleteName || id;
+        if (!confirm(`Delete member "${name}" and all their schedules?`)) return;
+        const form = document.getElementById('single-delete-member-form');
+        form.action = `/members/delete/${encodeURIComponent(id)}`;
+        submitWithTab(form);
+      });
+
+      // ── Select-all + enable/disable logic ──
       function wireSelection(containerSelector, allSelector, submitSelector) {
         const container = document.querySelector(containerSelector);
         if (!container) return;
@@ -485,7 +712,6 @@
         });
         update();
       }
-      // Per-table select-all for schedule tables
       document.querySelectorAll('.check-all-sched').forEach(allCb => {
         const table = allCb.closest('table');
         if (!table) return;
@@ -591,11 +817,10 @@
       document.getElementById('nav-schedules').addEventListener('click', () => showView('schedules'));
       document.getElementById('nav-members').addEventListener('click', () => showView('members'));
 
-      // Restore tab from URL hash on page load
       const initialTab = window.location.hash.replace('#', '') || 'schedules';
       if (initialTab !== 'schedules') showView(initialTab);
 
-      // Preserve tab across form submissions by appending #hash to the redirect
+      // Preserve tab across form submissions
       document.querySelectorAll('form[method="post"]').forEach(form => {
         form.addEventListener('submit', () => {
           const hash = window.location.hash;

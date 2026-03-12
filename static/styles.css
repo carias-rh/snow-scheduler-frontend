@@ -250,3 +250,84 @@ header { border-bottom: 2px solid var(--rhds-brand-red); padding: var(--rhds-spa
   color: #c9190b;
   font-weight: 600;
 }
+
+/* ── Schedule dialog ── */
+.sched-dialog {
+  border: 1px solid var(--rhds-border);
+  border-radius: 8px;
+  padding: var(--rhds-space-600);
+  max-width: 480px;
+  width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+}
+.sched-dialog::backdrop {
+  background: rgba(0,0,0,0.4);
+}
+.sched-dialog h3 {
+  margin: 0 0 var(--rhds-space-400);
+  font-size: 18px;
+}
+.dialog-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: var(--rhds-space-400);
+}
+
+/* ── Actions cell in schedule table ── */
+.actions-cell {
+  white-space: nowrap;
+  text-align: center;
+}
+.actions-cell .btn-sm {
+  margin: 0 2px;
+  vertical-align: middle;
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 6px;
+}
+
+/* ── Schedule toolbar (below table) ── */
+.schedule-toolbar {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.btn-add-sched {
+  background: var(--rhds-brand-red);
+  color: #fff;
+  border: 1px solid var(--rhds-brand-red);
+  font-weight: 600;
+}
+
+/* ── Member inline edit controls ── */
+.member-edit-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+.member-edit-input {
+  flex: 1;
+  min-width: 100px;
+}
+.member-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.member-actions .btn-sm {
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 6px;
+}
+.btn-member-save {
+  background: var(--rhds-brand-red);
+  color: #fff;
+  border: 1px solid var(--rhds-brand-red);
+}
+.btn-member-cancel {
+  background: transparent;
+  color: var(--rhds-text);
+  border: 1px solid var(--rhds-border);
+}

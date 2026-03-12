@@ -516,14 +516,7 @@ def index():
 
     zone_groups = [g for g in groups if g.get("zone_id") == selected_zone] if selected_zone else groups
 
-    # PTO status: a member is "on PTO" if they have schedules but none are active
-    all_schedules = state.get("schedules", [])
-    members_on_pto = set()
-    for m in members:
-        mid = m["id"]
-        member_scheds = [s for s in all_schedules if s.get("member_id") == mid]
-        if member_scheds and not any(s.get("active", True) for s in member_scheds):
-            members_on_pto.add(mid)
+    members_on_pto = set(state.get("pto", []))
 
     return render_template(
         "index.html",
@@ -623,24 +616,43 @@ def delete_members_bulk():
 def toggle_member_schedules(member_id: str):
     """Activate or deactivate all schedules for a member (PTO management).
 
-    **PTO On** (active=false): deactivates all of the member's schedules.
+    PTO status is stored explicitly in ``state["pto"]`` (a list of member ids)
+    so it is independent of schedule active states.  Multiple members can be
+    on PTO simultaneously.
 
-    **PTO Off** (active=true): smart reactivation — only activates schedules
-    where the member has priority 1, or where no higher-priority person has an
-    active schedule in the same group.
+    Priority cascade logic:
+      - **PTO On**: deactivates all of the member's schedules, then for each
+        affected group promotes the next-priority member who is NOT on PTO.
+      - **PTO Off**: reactivates schedules only where the member is the
+        highest-priority non-PTO person, then demotes lower-priority members
+        that were covering.
+
+    Schedules without a priority are always toggled directly (no cascade).
     """
     state = load_state()
     active_param = (request.form.get("active") or "").strip().lower()
     active_value = active_param in ("1", "true", "on", "yes")
     group_filter = request.form.get("group", "").strip() or None
     all_schedules = state.get("schedules", [])
+    pto_set = set(state.get("pto", []))
 
     member_map = get_member_map(state)
     member = member_map.get(member_id, {})
     member_name = member.get("name", member_id)
 
-    activated = 0
+    # Update the explicit PTO list
+    if not active_value:
+        pto_set.add(member_id)
+    else:
+        pto_set.discard(member_id)
+    state["pto"] = list(pto_set)
+
+    toggled = 0
     skipped = 0
+    promoted = 0
+    demoted = 0
+
+    affected_groups: set = set()
 
     for s in all_schedules:
         if s.get("member_id") != member_id:
@@ -649,34 +661,87 @@ def toggle_member_schedules(member_id: str):
             continue
 
         if not active_value:
-            # PTO On — deactivate everything
             s["active"] = False
-            activated += 1
+            toggled += 1
+            if s.get("group"):
+                affected_groups.add(s["group"])
         else:
-            # PTO Off — smart reactivation
-            my_priority = s.get("priority") or 1
-            if my_priority == 1:
+            my_priority = s.get("priority")
+            if my_priority is None:
                 s["active"] = True
-                activated += 1
+                toggled += 1
+                continue
+
+            grp = s.get("group")
+            higher_active = any(
+                other.get("active")
+                and other.get("group") == grp
+                and other.get("member_id") != member_id
+                and other.get("member_id") not in pto_set
+                and (other.get("priority") or 1) < my_priority
+                for other in all_schedules
+            )
+            if higher_active:
+                skipped += 1
             else:
-                grp = s.get("group")
-                higher_active = any(
-                    other.get("active")
-                    and other.get("group") == grp
-                    and other.get("member_id") != member_id
-                    and (other.get("priority") or 1) < my_priority
-                    for other in all_schedules
-                )
-                if higher_active:
-                    skipped += 1
-                else:
-                    s["active"] = True
-                    activated += 1
+                s["active"] = True
+                toggled += 1
+                if grp:
+                    affected_groups.add(grp)
+
+    # -- Priority cascade for affected groups --
+    for grp in affected_groups:
+        grp_schedules = [s for s in all_schedules if s.get("group") == grp and s.get("priority") is not None]
+        if not grp_schedules:
+            continue
+
+        if not active_value:
+            # PTO On: promote the next-priority member who is NOT on PTO
+            non_pto_candidates = [
+                s for s in grp_schedules
+                if s.get("member_id") != member_id
+                and s.get("member_id") not in pto_set
+            ]
+            non_pto_candidates.sort(key=lambda s: s.get("priority") or 1)
+
+            already_active = any(s.get("active") for s in non_pto_candidates)
+            if not already_active and non_pto_candidates:
+                next_priority = non_pto_candidates[0].get("priority") or 1
+                for s in non_pto_candidates:
+                    if (s.get("priority") or 1) == next_priority:
+                        s["active"] = True
+                        promoted += 1
+                        logging.info("Cascade: promoted %s (p%s) in group %s",
+                                     member_map.get(s["member_id"], {}).get("name", s["member_id"]),
+                                     s.get("priority"), grp)
+        else:
+            # PTO Off: demote lower-priority members in this group
+            my_schedules_in_grp = [
+                s for s in grp_schedules
+                if s.get("member_id") == member_id and s.get("active")
+            ]
+            if not my_schedules_in_grp:
+                continue
+            my_best = min((s.get("priority") or 1) for s in my_schedules_in_grp)
+
+            for s in grp_schedules:
+                if s.get("member_id") == member_id:
+                    continue
+                if s.get("member_id") in pto_set:
+                    continue
+                if s.get("active") and (s.get("priority") or 1) > my_best:
+                    s["active"] = False
+                    demoted += 1
+                    logging.info("Cascade: demoted %s (p%s) in group %s",
+                                 member_map.get(s["member_id"], {}).get("name", s["member_id"]),
+                                 s.get("priority"), grp)
 
     save_state(state)
+
     action = "deactivated" if not active_value else "activated"
-    logging.info("PTO %s for %s: %d %s, %d skipped (group=%s)",
-                 "On" if not active_value else "Off", member_name, activated, action, skipped, group_filter)
+    logging.info("PTO %s for %s: %d %s, %d skipped, %d promoted, %d demoted (group=%s)",
+                 "On" if not active_value else "Off", member_name,
+                 toggled, action, skipped, promoted, demoted, group_filter)
 
     if request.accept_mimetypes.best == "application/json" or request.headers.get("X-Requested-With") == "fetch":
         return jsonify({
@@ -684,8 +749,10 @@ def toggle_member_schedules(member_id: str):
             "member_id": member_id,
             "member_name": member_name,
             "active": active_value,
-            "count": activated,
+            "count": toggled,
             "skipped": skipped,
+            "promoted": promoted,
+            "demoted": demoted,
         })
     return _redirect_back()
 

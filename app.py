@@ -586,6 +586,29 @@ def add_member():
     return redirect(target)
 
 
+@app.route("/members/edit/<member_id>", methods=["POST"])
+def edit_member(member_id: str):
+    """Rename an existing member."""
+    state = load_state()
+    name = request.form.get("name", "").strip()
+    if not name:
+        return "Name required", 400
+
+    updated = False
+    for m in state.get("members", []):
+        if m.get("id") == member_id:
+            m["name"] = name
+            updated = True
+            break
+    if not updated:
+        return "Member not found", 404
+
+    state["members"] = sorted(state["members"], key=lambda m: m["name"].lower())
+    save_state(state)
+    logging.info("Renamed member %s to: %s", member_id, name)
+    return _redirect_back()
+
+
 @app.route("/members/delete/<member_id>", methods=["POST"])
 def delete_member(member_id: str):
     state = load_state()
@@ -833,6 +856,87 @@ def add_schedule():
     state["schedules"].append(new_schedule)
     save_state(state)
     logging.info("Added cron schedule: %s (%s) group=%s p=%s", cron, canonical_tz, group, priority)
+    return _redirect_back()
+
+
+@app.route("/schedule/edit/<schedule_id>", methods=["POST"])
+def edit_schedule(schedule_id: str):
+    """Update an existing schedule in-place, preserving its id and active state."""
+    state = load_state()
+
+    target = None
+    for s in state.get("schedules", []):
+        if s.get("id") == schedule_id:
+            target = s
+            break
+    if target is None:
+        return "Schedule not found", 404
+
+    timezone_name = request.form.get("timezone", "UTC").strip() or "UTC"
+    member_id = request.form.get("member_id", "").strip()
+    group = request.form.get("group", "").strip() or None
+    priority_raw = request.form.get("priority", "").strip()
+    priority = int(priority_raw) if priority_raw else None
+
+    if not member_id:
+        return "member_id required", 400
+
+    try:
+        canonical_tz = canonicalize_timezone_name(timezone_name)
+    except Exception as e:
+        return f"Invalid timezone: {e}", 400
+
+    start_time = (request.form.get("start_time") or "").strip()
+    end_time = (request.form.get("end_time") or "").strip()
+    days = request.form.getlist("days")
+
+    if start_time:
+        try:
+            _ = _parse_time_of_day(start_time)
+            if end_time:
+                _ = _parse_time_of_day(end_time)
+        except Exception as e:
+            return f"Invalid time: {e}", 400
+        try:
+            days_int = [int(d) for d in days]
+            for d in days_int:
+                if d < 0 or d > 6:
+                    raise ValueError("day out of range")
+        except Exception:
+            return "Invalid days; must be integers 0=Mon .. 6=Sun", 400
+
+        target["member_id"] = member_id
+        target["start_time"] = start_time
+        target["end_time"] = end_time or None
+        target["days"] = days_int
+        target["timezone"] = canonical_tz
+        target["group"] = group
+        target["priority"] = priority
+        target.pop("cron", None)
+        save_state(state)
+        logging.info("Edited schedule %s: range %s-%s (%s) days=%s group=%s p=%s",
+                     schedule_id, start_time, end_time or "", canonical_tz, days_int, group, priority)
+        return _redirect_back()
+
+    cron = request.form.get("cron", "").strip()
+    if not cron:
+        return "start_time or cron required", 400
+    try:
+        _ = next_fire_utc(cron, canonical_tz, get_now_utc())
+    except Exception as e:
+        return f"Invalid cron: {e}", 400
+
+    target["member_id"] = member_id
+    target["cron"] = cron
+    target["timezone"] = canonical_tz
+    target["group"] = group
+    target["priority"] = priority
+    target.pop("start_time", None)
+    target.pop("end_time", None)
+    target.pop("days", None)
+    save_state(state)
+    logging.info("Edited schedule %s: cron %s (%s) group=%s p=%s",
+                 schedule_id, cron, canonical_tz, group, priority)
     return _redirect_back()
 
 

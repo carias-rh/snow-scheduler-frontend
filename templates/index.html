@@ -394,8 +394,10 @@
       {% endif %}
 
       <div class="schedule-toolbar">
-        <button type="button" id="btn-add-pto-cal" class="btn-add-sched">+ Add Calendar</button>
+        <button type="button" id="btn-upload-ics" class="btn-add-sched">&#11014; Upload ICS File</button>
+        <button type="button" id="btn-add-pto-cal" class="btn-outline">+ Add Feed URL</button>
       </div>
+      <input type="file" id="ics-file-input" accept=".ics,text/calendar" style="display:none" />
 
       {% if pto_auto_members|length > 0 %}
       <h3 class="section-spacer">Auto-managed PTO</h3>
@@ -1099,6 +1101,45 @@
           } finally {
             syncBtn.disabled = false;
             syncBtn.textContent = '↻ Sync Now';
+          }
+        });
+      }
+
+      // Upload ICS file from browser
+      const uploadBtn = document.getElementById('btn-upload-ics');
+      const icsFileInput = document.getElementById('ics-file-input');
+      if (uploadBtn && icsFileInput) {
+        uploadBtn.addEventListener('click', () => icsFileInput.click());
+        icsFileInput.addEventListener('change', async () => {
+          const file = icsFileInput.files[0];
+          if (!file) return;
+          const calName = file.name.replace(/\.ics$/i, '').replace(/[_-]/g, ' ');
+          uploadBtn.disabled = true;
+          uploadBtn.textContent = 'Uploading…';
+          try {
+            const body = await file.arrayBuffer();
+            const res = await fetch(`/api/pto/upload_ics?name=${encodeURIComponent(calName)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/calendar', 'Accept': 'application/json' },
+              body: body,
+            });
+            const data = await res.json();
+            if (data.ok) {
+              let msg = `Uploaded "${file.name}"\n`;
+              msg += `${data.events_found} event(s) found, ${data.synced} calendar(s) synced`;
+              if (data.toggled_on && data.toggled_on.length) msg += `\nPTO ON: ${data.toggled_on.length} member(s)`;
+              if (data.toggled_off && data.toggled_off.length) msg += `\nPTO OFF: ${data.toggled_off.length} member(s)`;
+              alert(msg);
+              location.reload();
+            } else {
+              alert('Upload failed: ' + (data.error || 'Unknown error'));
+            }
+          } catch (err) {
+            alert('Upload failed: ' + err.message);
+          } finally {
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = '⬆ Upload ICS File';
+            icsFileInput.value = '';
           }
         });
       }

@@ -76,11 +76,31 @@ def ensure_data_file() -> None:
 
 def load_state() -> Dict[str, List[Dict]]:
     ensure_data_file()
-    return json.loads(DATA_FILE.read_text())
+    state = json.loads(DATA_FILE.read_text())
+    if _migrate_timezone_abbreviations(state):
+        DATA_FILE.write_text(json.dumps(state, indent=2))
+    return state
 
 
 def save_state(state: Dict[str, List[Dict]]) -> None:
     DATA_FILE.write_text(json.dumps(state, indent=2))
+
+
+def _migrate_timezone_abbreviations(state: Dict[str, List[Dict]]) -> bool:
+    """Rewrite legacy abbreviations (EST, CST, …) to IANA names in-place.
+
+    Returns True if any schedule was changed."""
+    changed = False
+    for s in state.get("schedules", []):
+        tz = s.get("timezone", "")
+        try:
+            canonical = canonicalize_timezone_name(tz)
+        except Exception:
+            continue
+        if canonical != tz:
+            s["timezone"] = canonical
+            changed = True
+    return changed
 
 
 
@@ -154,19 +174,20 @@ def canonicalize_timezone_name(tz_name: str) -> str:
     if not name:
         raise ValueError("Timezone required")
 
+    # Check abbreviation aliases FIRST so that ambiguous names like "EST"
+    # (a valid but fixed-offset IANA zone with no DST) get mapped to the
+    # DST-aware IANA zone (e.g. "America/New_York").
+    alias = name.upper()
+    if alias in TZ_ALIASES:
+        ZoneInfo(TZ_ALIASES[alias])
+        return TZ_ALIASES[alias]
+
     # Direct IANA name
     try:
         ZoneInfo(name)
         return name
     except Exception:
         pass
-
-    # Abbreviation alias
-    alias = name.upper()
-    if alias in TZ_ALIASES:
-        # Validate mapped IANA
-        ZoneInfo(TZ_ALIASES[alias])
-        return TZ_ALIASES[alias]
 
     raise ValueError(
         f"Unknown timezone '{tz_name}'. Use IANA (e.g., 'Europe/Berlin', 'America/New_York') "

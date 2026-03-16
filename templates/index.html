@@ -24,6 +24,7 @@
         <ul>
           <li><button class="nav-item is-active" id="nav-schedules" aria-controls="view-schedules" aria-current="page">Schedules</button></li>
           <li><button class="nav-item" id="nav-members" aria-controls="view-members">Members</button></li>
+          <li><button class="nav-item" id="nav-pto-calendars" aria-controls="view-pto-calendars">PTO Calendars</button></li>
         </ul>
       </nav>
       <main class="content" id="main-content">
@@ -322,6 +323,134 @@
         <button type="submit">Add</button>
       </form>
     </rh-card>
+  </section>
+
+  {# ════════════ PTO Calendars view ════════════ #}
+  <section id="view-pto-calendars" role="region" aria-labelledby="nav-pto-calendars" hidden>
+
+    {# Hidden form for per-row calendar delete #}
+    <form id="single-delete-cal-form" method="post" action="" style="display:none"></form>
+
+    <rh-card>
+      <h2 slot="heading">PTO Calendar Feeds (ICS)</h2>
+
+      <div class="pto-auto-bar">
+        <label class="pto-switch" title="Toggle automatic PTO sync">
+          <input type="checkbox" id="pto-auto-toggle" {% if pto_auto_enabled %}checked{% endif %} />
+          <span class="pto-slider"></span>
+          <span class="pto-label" style="font-size:14px">Background auto-sync</span>
+        </label>
+        <button type="button" id="btn-sync-now" class="btn-outline btn-sm" style="margin-left:auto">&#8635; Sync Now</button>
+      </div>
+
+      {% if pto_calendars|length > 0 %}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Match By</th>
+            <th>Interval</th>
+            <th>Last Sync</th>
+            <th>Status</th>
+            <th>Enabled</th>
+            <th style="width:80px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for cal in pto_calendars %}
+          <tr>
+            <td>{{ cal.name }}</td>
+            <td><span class="badge">{{ cal.match_by }}</span></td>
+            <td>{{ cal.poll_interval_minutes }}min</td>
+            <td>{% if cal.last_sync %}{{ cal.last_sync[:16]|replace('T', ' ') }}{% else %}<span class="hint">Never</span>{% endif %}</td>
+            <td>
+              {% if cal.last_sync_status == 'ok' %}
+                <span class="badge badge--ok">OK · {{ cal.last_sync_events }} events</span>
+              {% elif cal.last_sync_status %}
+                <span class="badge badge--error" title="{{ cal.last_sync_status }}">Error</span>
+              {% else %}
+                <span class="hint">—</span>
+              {% endif %}
+            </td>
+            <td style="text-align:center">
+              <input type="checkbox" class="toggle-cal-enabled" data-cal-id="{{ cal.id }}" {% if cal.enabled %}checked{% endif %} aria-label="Toggle enabled" />
+            </td>
+            <td class="actions-cell">
+              <button type="button" class="btn-sm btn-outline btn-edit-cal"
+                      data-cal-id="{{ cal.id }}"
+                      data-cal-name="{{ cal.name }}"
+                      data-cal-url="{{ cal.ics_url }}"
+                      data-cal-match="{{ cal.match_by }}"
+                      data-cal-interval="{{ cal.poll_interval_minutes }}"
+                      title="Edit">&#9998;</button>
+              <button type="button" class="btn-sm btn-danger btn-delete-cal" data-cal-id="{{ cal.id }}" title="Delete">&#128465;</button>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p>No PTO calendars configured yet. Subscribe to an ICS feed to auto-manage PTO.</p>
+      {% endif %}
+
+      <div class="schedule-toolbar">
+        <button type="button" id="btn-add-pto-cal" class="btn-add-sched">+ Add Calendar</button>
+      </div>
+
+      {% if pto_auto_members|length > 0 %}
+      <h3 class="section-spacer">Auto-managed PTO</h3>
+      <p class="hint">Members currently on PTO via calendar sync (not manually toggled):</p>
+      <ul class="pto-auto-list">
+        {% for mid in pto_auto_members %}
+          {% set m = (members | selectattr('id','equalto', mid) | list | first) %}
+          <li>{{ m.name if m else mid }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <h3 class="section-spacer">How It Works</h3>
+      <p class="hint">
+        Add an ICS feed URL from any calendar provider (Google Calendar, Outlook, Nextcloud, public holiday feeds)
+        or a local file path to an <code>.ics</code> file.
+        The app polls the source and auto-toggles PTO for members whose names appear in event titles.
+        Use "Match by email" if events use attendee addresses instead.
+      </p>
+    </rh-card>
+
+    {# ── Add / Edit PTO Calendar dialog ── #}
+    <dialog id="pto-cal-dialog" class="sched-dialog">
+      <form method="post" id="pto-cal-form" action="/pto_calendars/add">
+        <h3 id="pto-cal-dialog-title">Add PTO Calendar</h3>
+        <input type="hidden" name="cal_id" id="pto-cal-id" value="" />
+
+        <label>Calendar Name
+          <input name="name" id="pto-cal-name" type="text" required placeholder="e.g. Team PTO Calendar" />
+        </label>
+
+        <label>ICS Feed URL or File Path
+          <input name="ics_url" id="pto-cal-url" type="text" required placeholder="https://...basic.ics  or  /path/to/team-pto.ics" />
+        </label>
+
+        <label>Match Events By
+          <select name="match_by" id="pto-cal-match">
+            <option value="summary">Event title contains member name</option>
+            <option value="email">Attendee email matches member email</option>
+          </select>
+        </label>
+
+        <label>Poll Interval (minutes)
+          <input name="poll_interval_minutes" id="pto-cal-interval" type="number" min="1" max="1440" value="15" />
+        </label>
+
+        <p class="hint">Accepts an HTTP/HTTPS URL or a local file path (e.g. <code>/data/team-pto.ics</code>). The feed is checked at the configured interval when auto-sync is enabled.</p>
+
+        <div class="dialog-buttons">
+          <button type="submit" id="pto-cal-submit">Add</button>
+          <button type="button" id="pto-cal-cancel" class="btn-outline">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
   </section>
 
   <script>
@@ -878,8 +1007,9 @@
 
       // Sidebar navigation with URL hash persistence
       const viewMap = {
-        'schedules': { view: 'view-schedules', btn: 'nav-schedules' },
-        'members':   { view: 'view-members',   btn: 'nav-members' },
+        'schedules':      { view: 'view-schedules',      btn: 'nav-schedules' },
+        'members':        { view: 'view-members',        btn: 'nav-members' },
+        'pto-calendars':  { view: 'view-pto-calendars',  btn: 'nav-pto-calendars' },
       };
       function showView(key) {
         const entry = viewMap[key];
@@ -899,9 +1029,125 @@
       }
       document.getElementById('nav-schedules').addEventListener('click', () => showView('schedules'));
       document.getElementById('nav-members').addEventListener('click', () => showView('members'));
+      document.getElementById('nav-pto-calendars').addEventListener('click', () => showView('pto-calendars'));
 
       const initialTab = window.location.hash.replace('#', '') || 'schedules';
       if (initialTab !== 'schedules') showView(initialTab);
+
+      // ── PTO Calendar management ──
+      const ptcDialog = document.getElementById('pto-cal-dialog');
+      const ptcForm = document.getElementById('pto-cal-form');
+
+      // Auto-sync toggle
+      const ptoAutoToggle = document.getElementById('pto-auto-toggle');
+      if (ptoAutoToggle) {
+        ptoAutoToggle.addEventListener('change', async (e) => {
+          try {
+            const res = await fetch('/pto_calendars/toggle_auto', {
+              method: 'POST',
+              headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+            });
+            if (!res.ok) throw new Error('Request failed');
+          } catch (err) {
+            e.target.checked = !e.target.checked;
+            alert('Failed to toggle auto-sync');
+          }
+        });
+      }
+
+      // Per-calendar enabled toggle
+      document.addEventListener('change', async (e) => {
+        const t = e.target;
+        if (!t.classList.contains('toggle-cal-enabled')) return;
+        const calId = t.dataset.calId;
+        try {
+          const res = await fetch(`/pto_calendars/toggle_enabled/${encodeURIComponent(calId)}`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+          });
+          if (!res.ok) throw new Error('Request failed');
+        } catch (err) {
+          t.checked = !t.checked;
+          alert('Failed to toggle calendar');
+        }
+      });
+
+      // Sync Now
+      const syncBtn = document.getElementById('btn-sync-now');
+      if (syncBtn) {
+        syncBtn.addEventListener('click', async () => {
+          syncBtn.disabled = true;
+          syncBtn.textContent = '↻ Syncing…';
+          try {
+            const res = await fetch('/pto_calendars/sync', {
+              method: 'POST',
+              headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+            });
+            const data = await res.json();
+            if (data.ok) {
+              let msg = `Sync complete: ${data.synced} calendar(s), ${data.events_found} event(s) found`;
+              if (data.toggled_on && data.toggled_on.length) msg += `\nPTO ON: ${data.toggled_on.length} member(s)`;
+              if (data.toggled_off && data.toggled_off.length) msg += `\nPTO OFF: ${data.toggled_off.length} member(s)`;
+              if (data.errors && data.errors.length) msg += `\n${data.errors.length} error(s)`;
+              alert(msg);
+              location.reload();
+            } else {
+              alert('Sync failed: ' + (data.error || 'Unknown error'));
+            }
+          } catch (err) {
+            alert('Sync failed');
+          } finally {
+            syncBtn.disabled = false;
+            syncBtn.textContent = '↻ Sync Now';
+          }
+        });
+      }
+
+      // Add PTO Calendar dialog
+      const addPtoCalBtn = document.getElementById('btn-add-pto-cal');
+      if (addPtoCalBtn && ptcDialog) {
+        addPtoCalBtn.addEventListener('click', () => {
+          ptcForm.reset();
+          ptcForm.action = '/pto_calendars/add';
+          document.getElementById('pto-cal-dialog-title').textContent = 'Add PTO Calendar';
+          document.getElementById('pto-cal-submit').textContent = 'Add';
+          document.getElementById('pto-cal-id').value = '';
+          document.getElementById('pto-cal-interval').value = '15';
+          ptcDialog.showModal();
+        });
+      }
+
+      // Edit PTO Calendar
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-edit-cal');
+        if (!btn || !ptcDialog) return;
+        const calId = btn.dataset.calId;
+        ptcForm.action = `/pto_calendars/edit/${encodeURIComponent(calId)}`;
+        document.getElementById('pto-cal-dialog-title').textContent = 'Edit PTO Calendar';
+        document.getElementById('pto-cal-submit').textContent = 'Save';
+        document.getElementById('pto-cal-id').value = calId;
+        document.getElementById('pto-cal-name').value = btn.dataset.calName || '';
+        document.getElementById('pto-cal-url').value = btn.dataset.calUrl || '';
+        document.getElementById('pto-cal-match').value = btn.dataset.calMatch || 'summary';
+        document.getElementById('pto-cal-interval').value = btn.dataset.calInterval || '15';
+        ptcDialog.showModal();
+      });
+
+      // Cancel / backdrop close for PTO calendar dialog
+      const ptcCancel = document.getElementById('pto-cal-cancel');
+      if (ptcCancel) ptcCancel.addEventListener('click', () => ptcDialog.close());
+      if (ptcDialog) ptcDialog.addEventListener('click', (e) => { if (e.target === ptcDialog) ptcDialog.close(); });
+
+      // Delete PTO Calendar
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-delete-cal');
+        if (!btn) return;
+        if (!confirm('Delete this PTO calendar?')) return;
+        const calId = btn.dataset.calId;
+        const form = document.getElementById('single-delete-cal-form');
+        form.action = `/pto_calendars/delete/${encodeURIComponent(calId)}`;
+        submitWithTab(form);
+      });
 
       // Preserve tab across form submissions
       document.querySelectorAll('form[method="post"]').forEach(form => {

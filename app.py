@@ -2,14 +2,17 @@ import copy
 import json
 import logging
 import os
+import threading
 import uuid
-from datetime import datetime, timezone, timedelta, time
+from datetime import date, datetime, timezone, timedelta, time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import requests as http_requests
 from croniter import croniter
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, url_for
+from icalendar import Calendar as ICalCalendar
 from zoneinfo import ZoneInfo
 
 # Load .env from the app directory first, then walk up to find a project-root .env.
@@ -519,11 +522,17 @@ def index():
     zone_groups = [g for g in groups if g.get("zone_id") == selected_zone] if selected_zone else groups
 
     members_on_pto = set(state.get("pto", []))
+    pto_calendars = state.get("pto_calendars", [])
+    pto_auto_enabled = state.get("pto_auto_enabled", False)
+    pto_auto_members = set(state.get("pto_auto", []))
 
     return render_template(
         "index.html",
         members=members,
         members_on_pto=members_on_pto,
+        pto_calendars=pto_calendars,
+        pto_auto_enabled=pto_auto_enabled,
+        pto_auto_members=pto_auto_members,
         schedules=schedules,
         zones=zones,
         groups=groups,
@@ -637,13 +646,11 @@ def delete_members_bulk():
     return _redirect_back()
 
 
-@app.route("/members/toggle_schedules/<member_id>", methods=["POST"])
-def toggle_member_schedules(member_id: str):
-    """Activate or deactivate all schedules for a member (PTO management).
+def _toggle_pto(state: Dict, member_id: str, going_on_pto: bool,
+                group_filter: Optional[str] = None) -> Dict:
+    """Core PTO toggle logic — modifies *state* in-place, returns stats.
 
-    PTO status is stored explicitly in ``state["pto"]`` (a list of member ids)
-    so it is independent of schedule active states.  Multiple members can be
-    on PTO simultaneously.
+    Does NOT call ``save_state()``; the caller is responsible for persisting.
 
     Priority cascade logic:
       - **PTO On**: deactivates all of the member's schedules, then for each
@@ -651,22 +658,13 @@ def toggle_member_schedules(member_id: str):
       - **PTO Off**: reactivates schedules only where the member is the
         highest-priority non-PTO person, then demotes lower-priority members
         that were covering.
-
-    Schedules without a priority are always toggled directly (no cascade).
     """
-    state = load_state()
-    active_param = (request.form.get("active") or "").strip().lower()
-    active_value = active_param in ("1", "true", "on", "yes")
-    group_filter = request.form.get("group", "").strip() or None
     all_schedules = state.get("schedules", [])
     pto_set = set(state.get("pto", []))
-
     member_map = get_member_map(state)
-    member = member_map.get(member_id, {})
-    member_name = member.get("name", member_id)
+    active_value = not going_on_pto
 
-    # Update the explicit PTO list
-    if not active_value:
+    if going_on_pto:
         pto_set.add(member_id)
     else:
         pto_set.discard(member_id)
@@ -676,7 +674,6 @@ def toggle_member_schedules(member_id: str):
     skipped = 0
     promoted = 0
     demoted = 0
-
     affected_groups: set = set()
 
     for s in all_schedules:
@@ -714,21 +711,19 @@ def toggle_member_schedules(member_id: str):
                 if grp:
                     affected_groups.add(grp)
 
-    # -- Priority cascade for affected groups --
     for grp in affected_groups:
-        grp_schedules = [s for s in all_schedules if s.get("group") == grp and s.get("priority") is not None]
+        grp_schedules = [s for s in all_schedules
+                         if s.get("group") == grp and s.get("priority") is not None]
         if not grp_schedules:
             continue
 
         if not active_value:
-            # PTO On: promote the next-priority member who is NOT on PTO
             non_pto_candidates = [
                 s for s in grp_schedules
                 if s.get("member_id") != member_id
                 and s.get("member_id") not in pto_set
             ]
             non_pto_candidates.sort(key=lambda s: s.get("priority") or 1)
-
             already_active = any(s.get("active") for s in non_pto_candidates)
             if not already_active and non_pto_candidates:
                 next_priority = non_pto_candidates[0].get("priority") or 1
@@ -736,11 +731,12 @@ def toggle_member_schedules(member_id: str):
                     if (s.get("priority") or 1) == next_priority:
                         s["active"] = True
                         promoted += 1
-                        logging.info("Cascade: promoted %s (p%s) in group %s",
-                                     member_map.get(s["member_id"], {}).get("name", s["member_id"]),
-                                     s.get("priority"), grp)
+                        logging.info(
+                            "Cascade: promoted %s (p%s) in group %s",
+                            member_map.get(s["member_id"], {}).get("name", s["member_id"]),
+                            s.get("priority"), grp,
+                        )
         else:
-            # PTO Off: demote lower-priority members in this group
             my_schedules_in_grp = [
                 s for s in grp_schedules
                 if s.get("member_id") == member_id and s.get("active")
@@ -748,7 +744,6 @@ def toggle_member_schedules(member_id: str):
             if not my_schedules_in_grp:
                 continue
             my_best = min((s.get("priority") or 1) for s in my_schedules_in_grp)
-
             for s in grp_schedules:
                 if s.get("member_id") == member_id:
                     continue
@@ -757,16 +752,43 @@ def toggle_member_schedules(member_id: str):
                 if s.get("active") and (s.get("priority") or 1) > my_best:
                     s["active"] = False
                     demoted += 1
-                    logging.info("Cascade: demoted %s (p%s) in group %s",
-                                 member_map.get(s["member_id"], {}).get("name", s["member_id"]),
-                                 s.get("priority"), grp)
+                    logging.info(
+                        "Cascade: demoted %s (p%s) in group %s",
+                        member_map.get(s["member_id"], {}).get("name", s["member_id"]),
+                        s.get("priority"), grp,
+                    )
+
+    return {"toggled": toggled, "skipped": skipped, "promoted": promoted, "demoted": demoted}
+
+
+@app.route("/members/toggle_schedules/<member_id>", methods=["POST"])
+def toggle_member_schedules(member_id: str):
+    """Activate or deactivate all schedules for a member (PTO management)."""
+    state = load_state()
+    active_param = (request.form.get("active") or "").strip().lower()
+    active_value = active_param in ("1", "true", "on", "yes")
+    group_filter = request.form.get("group", "").strip() or None
+    going_on_pto = not active_value
+
+    member_map = get_member_map(state)
+    member = member_map.get(member_id, {})
+    member_name = member.get("name", member_id)
+
+    stats = _toggle_pto(state, member_id, going_on_pto, group_filter)
+
+    # Manual PTO-off also clears the auto-managed flag
+    if not going_on_pto:
+        pto_auto = set(state.get("pto_auto", []))
+        pto_auto.discard(member_id)
+        state["pto_auto"] = list(pto_auto)
 
     save_state(state)
 
-    action = "deactivated" if not active_value else "activated"
+    action = "deactivated" if going_on_pto else "activated"
     logging.info("PTO %s for %s: %d %s, %d skipped, %d promoted, %d demoted (group=%s)",
-                 "On" if not active_value else "Off", member_name,
-                 toggled, action, skipped, promoted, demoted, group_filter)
+                 "On" if going_on_pto else "Off", member_name,
+                 stats["toggled"], action, stats["skipped"],
+                 stats["promoted"], stats["demoted"], group_filter)
 
     if request.accept_mimetypes.best == "application/json" or request.headers.get("X-Requested-With") == "fetch":
         return jsonify({
@@ -774,10 +796,10 @@ def toggle_member_schedules(member_id: str):
             "member_id": member_id,
             "member_name": member_name,
             "active": active_value,
-            "count": toggled,
-            "skipped": skipped,
-            "promoted": promoted,
-            "demoted": demoted,
+            "count": stats["toggled"],
+            "skipped": stats["skipped"],
+            "promoted": stats["promoted"],
+            "demoted": stats["demoted"],
         })
     return _redirect_back()
 
@@ -1145,6 +1167,386 @@ def api_groups():
     if zone:
         groups = [g for g in groups if g.get("zone_id") == zone]
     return jsonify(groups)
+
+
+# ---------------------------------------------------------------------------
+# PTO Calendar (ICS Feed) Sync
+# ---------------------------------------------------------------------------
+
+def _read_ics_source(ics_url: str) -> bytes:
+    """Read ICS data from a URL (http/https) or a local file path."""
+    stripped = ics_url.strip()
+    if stripped.startswith("file://"):
+        return Path(stripped[7:]).read_bytes()
+    if stripped.startswith("/") or (len(stripped) > 1 and stripped[1] == ":"):
+        return Path(stripped).read_bytes()
+    resp = http_requests.get(stripped, timeout=30)
+    resp.raise_for_status()
+    content_type = resp.headers.get("Content-Type", "")
+    if "text/html" in content_type:
+        raise ValueError(
+            "URL returned HTML instead of ICS data. "
+            "If using Google Calendar, ensure the calendar is set to public "
+            "(Settings → Access permissions → Make available to public) "
+            "and use the ICS link from 'Integrate calendar'."
+        )
+    return resp.content
+
+
+def _fetch_active_pto_events(ics_url: str, now_utc: datetime) -> List[Dict]:
+    """Fetch an ICS feed (URL or local path) and return VEVENTs active at *now_utc*."""
+    cal = ICalCalendar.from_ical(_read_ics_source(ics_url))
+
+    active: List[Dict] = []
+    for comp in cal.walk():
+        if comp.name != "VEVENT":
+            continue
+
+        dtstart = comp.get("DTSTART")
+        if not dtstart:
+            continue
+        start_val = dtstart.dt
+        dtend = comp.get("DTEND")
+
+        if isinstance(start_val, date) and not isinstance(start_val, datetime):
+            ev_start = datetime(start_val.year, start_val.month, start_val.day,
+                                tzinfo=timezone.utc)
+            if dtend:
+                end_val = dtend.dt
+                if isinstance(end_val, date) and not isinstance(end_val, datetime):
+                    ev_end = datetime(end_val.year, end_val.month, end_val.day,
+                                      tzinfo=timezone.utc)
+                else:
+                    ev_end = (end_val.astimezone(timezone.utc) if end_val.tzinfo
+                              else end_val.replace(tzinfo=timezone.utc))
+            else:
+                ev_end = ev_start + timedelta(days=1)
+        else:
+            if start_val.tzinfo is None:
+                start_val = start_val.replace(tzinfo=timezone.utc)
+            ev_start = start_val.astimezone(timezone.utc)
+            if dtend:
+                end_val = dtend.dt
+                if isinstance(end_val, date) and not isinstance(end_val, datetime):
+                    ev_end = datetime(end_val.year, end_val.month, end_val.day,
+                                      tzinfo=timezone.utc)
+                elif end_val.tzinfo is None:
+                    ev_end = end_val.replace(tzinfo=timezone.utc)
+                else:
+                    ev_end = end_val.astimezone(timezone.utc)
+            else:
+                dur = comp.get("DURATION")
+                ev_end = (ev_start + dur.dt) if dur else (ev_start + timedelta(hours=8))
+
+        if ev_start <= now_utc < ev_end:
+            summary = str(comp.get("SUMMARY", ""))
+            attendees = comp.get("ATTENDEE")
+            if attendees is None:
+                attendees = []
+            elif not isinstance(attendees, list):
+                attendees = [attendees]
+            active.append({
+                "summary": summary,
+                "start": ev_start.isoformat(),
+                "end": ev_end.isoformat(),
+                "attendees": [
+                    str(a).replace("mailto:", "").strip().lower()
+                    for a in attendees if a
+                ],
+            })
+
+    return active
+
+
+def _match_event_to_members(event: Dict, members: List[Dict],
+                            match_by: str) -> List[Dict]:
+    """Match an ICS event to members by summary text or attendee e-mail."""
+    matched: List[Dict] = []
+    if match_by == "summary":
+        summary_lower = event["summary"].lower()
+        for m in members:
+            if m["name"].lower() in summary_lower:
+                matched.append(m)
+    elif match_by == "email":
+        event_emails = set(event.get("attendees", []))
+        for m in members:
+            member_email = m.get("email", "").strip().lower()
+            if member_email and member_email in event_emails:
+                matched.append(m)
+    return matched
+
+
+def sync_pto_calendars() -> Dict:
+    """Sync all enabled PTO calendars and auto-toggle PTO.
+
+    Returns a summary dict with counts of what changed.
+    """
+    state = load_state()
+    calendars = state.get("pto_calendars", [])
+    enabled_cals = [c for c in calendars if c.get("enabled", True)]
+
+    if not enabled_cals:
+        save_state(state)
+        return {"synced": 0, "events_found": 0, "toggled_on": [], "toggled_off": [], "errors": []}
+
+    now_utc = get_now_utc()
+    members = state.get("members", [])
+    pto_auto = set(state.get("pto_auto", []))
+    should_be_on_pto: set = set()
+    errors: List[Dict] = []
+    events_found = 0
+
+    for cal_cfg in enabled_cals:
+        cal_id = cal_cfg["id"]
+        ics_url = cal_cfg.get("ics_url", "")
+        match_by = cal_cfg.get("match_by", "summary")
+        try:
+            active_events = _fetch_active_pto_events(ics_url, now_utc)
+            events_found += len(active_events)
+            for ev in active_events:
+                for m in _match_event_to_members(ev, members, match_by):
+                    should_be_on_pto.add(m["id"])
+            cal_cfg["last_sync"] = now_utc.isoformat()
+            cal_cfg["last_sync_status"] = "ok"
+            cal_cfg["last_sync_events"] = len(active_events)
+        except Exception as exc:
+            logging.warning("Failed to sync PTO calendar %s: %s",
+                            cal_cfg.get("name", cal_id), exc)
+            cal_cfg["last_sync"] = now_utc.isoformat()
+            cal_cfg["last_sync_status"] = f"error: {exc}"
+            cal_cfg["last_sync_events"] = 0
+            errors.append({"calendar": cal_cfg.get("name", cal_id), "error": str(exc)})
+
+    pto_set = set(state.get("pto", []))
+    toggled_on: List[str] = []
+    toggled_off: List[str] = []
+
+    for mid in should_be_on_pto:
+        if mid not in pto_set:
+            _toggle_pto(state, mid, going_on_pto=True)
+            pto_auto.add(mid)
+            toggled_on.append(mid)
+
+    for mid in list(pto_auto):
+        if mid not in should_be_on_pto:
+            _toggle_pto(state, mid, going_on_pto=False)
+            pto_auto.discard(mid)
+            toggled_off.append(mid)
+
+    state["pto_auto"] = list(pto_auto)
+    save_state(state)
+
+    if toggled_on or toggled_off:
+        member_map = get_member_map(state)
+        on_names = [member_map.get(mid, {}).get("name", mid) for mid in toggled_on]
+        off_names = [member_map.get(mid, {}).get("name", mid) for mid in toggled_off]
+        if on_names:
+            logging.info("PTO Auto-Sync: set PTO ON for: %s", ", ".join(on_names))
+        if off_names:
+            logging.info("PTO Auto-Sync: set PTO OFF for: %s", ", ".join(off_names))
+
+    return {
+        "synced": len(enabled_cals),
+        "events_found": events_found,
+        "toggled_on": toggled_on,
+        "toggled_off": toggled_off,
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# PTO Calendar CRUD routes
+# ---------------------------------------------------------------------------
+
+@app.route("/pto_calendars/add", methods=["POST"])
+def add_pto_calendar():
+    state = load_state()
+    name = request.form.get("name", "").strip()
+    ics_url = request.form.get("ics_url", "").strip()
+    match_by = request.form.get("match_by", "summary").strip()
+    poll_raw = request.form.get("poll_interval_minutes", "15") or "15"
+    poll_interval = max(1, int(poll_raw))
+
+    if not name or not ics_url:
+        return "Name and ICS URL required", 400
+
+    cal = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "ics_url": ics_url,
+        "match_by": match_by,
+        "poll_interval_minutes": poll_interval,
+        "enabled": True,
+        "last_sync": None,
+        "last_sync_status": None,
+        "last_sync_events": 0,
+    }
+    state.setdefault("pto_calendars", []).append(cal)
+    save_state(state)
+    logging.info("Added PTO calendar: %s (%s)", name, ics_url)
+    return _redirect_back()
+
+
+@app.route("/pto_calendars/edit/<cal_id>", methods=["POST"])
+def edit_pto_calendar(cal_id: str):
+    state = load_state()
+    for cal in state.get("pto_calendars", []):
+        if cal["id"] == cal_id:
+            cal["name"] = request.form.get("name", cal["name"]).strip()
+            cal["ics_url"] = request.form.get("ics_url", cal["ics_url"]).strip()
+            cal["match_by"] = request.form.get("match_by", cal.get("match_by", "summary")).strip()
+            poll_raw = request.form.get("poll_interval_minutes", "")
+            if poll_raw:
+                cal["poll_interval_minutes"] = max(1, int(poll_raw))
+            save_state(state)
+            logging.info("Updated PTO calendar: %s", cal["name"])
+            return _redirect_back()
+    return "Calendar not found", 404
+
+
+@app.route("/pto_calendars/delete/<cal_id>", methods=["POST"])
+def delete_pto_calendar(cal_id: str):
+    state = load_state()
+    state["pto_calendars"] = [c for c in state.get("pto_calendars", []) if c["id"] != cal_id]
+    save_state(state)
+    logging.info("Deleted PTO calendar: %s", cal_id)
+    return _redirect_back()
+
+
+@app.route("/pto_calendars/toggle_enabled/<cal_id>", methods=["POST"])
+def toggle_pto_calendar_enabled(cal_id: str):
+    state = load_state()
+    for cal in state.get("pto_calendars", []):
+        if cal["id"] == cal_id:
+            cal["enabled"] = not cal.get("enabled", True)
+            save_state(state)
+            if (request.accept_mimetypes.best == "application/json"
+                    or request.headers.get("X-Requested-With") == "fetch"):
+                return jsonify({"ok": True, "enabled": cal["enabled"]})
+            return _redirect_back()
+    return "Calendar not found", 404
+
+
+@app.route("/pto_calendars/sync", methods=["POST"])
+def trigger_pto_sync():
+    """Manually trigger a PTO calendar sync."""
+    try:
+        result = sync_pto_calendars()
+        if (request.accept_mimetypes.best == "application/json"
+                or request.headers.get("X-Requested-With") == "fetch"):
+            return jsonify({"ok": True, **result})
+        return _redirect_back()
+    except Exception as exc:
+        if (request.accept_mimetypes.best == "application/json"
+                or request.headers.get("X-Requested-With") == "fetch"):
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        return f"Sync failed: {exc}", 500
+
+
+@app.route("/api/pto/upload_ics", methods=["POST"])
+def upload_pto_ics():
+    """Receive an ICS file (e.g. from a Google Apps Script), save it locally,
+    upsert a PTO calendar entry pointing to the file, and trigger a sync."""
+    api_key = os.environ.get("PTO_UPLOAD_API_KEY", "")
+    if api_key and request.headers.get("X-Api-Key") != api_key:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    body = request.get_data()
+    if not body:
+        return jsonify({"ok": False, "error": "Empty body"}), 400
+
+    name = request.args.get("name", "push").strip()
+    slug = "".join(c if c.isalnum() or c == "-" else "-" for c in name.lower()).strip("-") or "push"
+    ics_path = DATA_FILE.parent / f"pto-push-{slug}.ics"
+    ics_path.write_bytes(body)
+
+    state = load_state()
+    cals = state.setdefault("pto_calendars", [])
+    marker = f"push:{slug}"
+    existing = next((c for c in cals if c.get("push_id") == marker), None)
+    if existing:
+        existing["ics_url"] = str(ics_path)
+        existing["name"] = name
+    else:
+        cals.append({
+            "id": str(uuid.uuid4()),
+            "push_id": marker,
+            "name": name,
+            "ics_url": str(ics_path),
+            "match_by": request.args.get("match_by", "summary"),
+            "poll_interval_minutes": 15,
+            "enabled": True,
+            "last_sync": None,
+            "last_sync_status": None,
+            "last_sync_events": 0,
+        })
+    state["pto_auto_enabled"] = True
+    save_state(state)
+
+    try:
+        result = sync_pto_calendars()
+        logging.info("ICS upload sync (%s): %s", name, result)
+        return jsonify({"ok": True, "file": str(ics_path), **result})
+    except Exception as exc:
+        logging.error("ICS upload sync failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/pto_calendars/toggle_auto", methods=["POST"])
+def toggle_pto_auto():
+    """Enable/disable automatic background PTO sync."""
+    state = load_state()
+    state["pto_auto_enabled"] = not state.get("pto_auto_enabled", False)
+    save_state(state)
+    if (request.accept_mimetypes.best == "application/json"
+            or request.headers.get("X-Requested-With") == "fetch"):
+        return jsonify({"ok": True, "enabled": state["pto_auto_enabled"]})
+    return _redirect_back()
+
+
+# ---------------------------------------------------------------------------
+# Background PTO sync worker
+# ---------------------------------------------------------------------------
+
+_pto_sync_stop = threading.Event()
+
+
+def _pto_sync_worker() -> None:
+    """Daemon thread that periodically syncs PTO calendars."""
+    logging.info("PTO sync worker started")
+    while not _pto_sync_stop.is_set():
+        try:
+            state = load_state()
+        except Exception:
+            _pto_sync_stop.wait(60)
+            continue
+
+        if not state.get("pto_auto_enabled", False):
+            _pto_sync_stop.wait(60)
+            continue
+
+        calendars = [c for c in state.get("pto_calendars", []) if c.get("enabled", True)]
+        if not calendars:
+            _pto_sync_stop.wait(60)
+            continue
+
+        min_interval = min((c.get("poll_interval_minutes", 15) for c in calendars), default=15)
+
+        try:
+            result = sync_pto_calendars()
+            logging.info("PTO background sync: %s", result)
+        except Exception as exc:
+            logging.error("PTO sync worker error: %s", exc)
+
+        _pto_sync_stop.wait(max(60, min_interval * 60))
+
+
+def _start_pto_sync_worker() -> None:
+    t = threading.Thread(target=_pto_sync_worker, daemon=True, name="pto-sync")
+    t.start()
+
+
+_start_pto_sync_worker()
 
 
 if __name__ == "__main__":

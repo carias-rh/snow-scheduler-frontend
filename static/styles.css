@@ -403,3 +403,36 @@ header { border-bottom: 2px solid var(--rhds-brand-red); padding: var(--rhds-spa
   color: var(--rhds-text);
   border: 1px solid var(--rhds-border);
 }
+
+/* ── PTO Calendar section ── */
+.pto-auto-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: var(--rhds-space-400);
+  padding: var(--rhds-space-200) 0;
+  border-bottom: 1px solid var(--rhds-border);
+}
+.badge--ok {
+  background: #3e8635;
+  color: #fff;
+}
+.badge--error {
+  background: #c9190b;
+  color: #fff;
+}
+.pto-auto-list {
+  list-style: none;
+  padding-left: 0;
+  margin: var(--rhds-space-200) 0;
+}
+.pto-auto-list li {
+  display: inline-block;
+  padding: 2px 10px;
+  margin: 2px 4px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #c9190b;
+  color: #fff;
+}

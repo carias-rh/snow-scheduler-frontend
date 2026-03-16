@@ -204,6 +204,12 @@ objects:
                       name: ${TEAM}-autoassign-env-file
                       key: SNOW_GROUPS_CONFIG
                       optional: true
+                - name: PTO_UPLOAD_API_KEY
+                  valueFrom:
+                    configMapKeyRef:
+                      name: ${TEAM}-autoassign-env-file
+                      key: PTO_UPLOAD_API_KEY
+                      optional: true
               volumeMounts:
                 - name: data
                   mountPath: /app/data

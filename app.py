@@ -791,9 +791,13 @@ def add_schedule():
     state = load_state()
     timezone_name = request.form.get("timezone", "UTC").strip() or "UTC"
     member_id = request.form.get("member_id", "").strip()
-    group = request.form.get("group", "").strip() or None
     priority_raw = request.form.get("priority", "").strip()
     priority = int(priority_raw) if priority_raw else None
+
+    groups_raw = request.form.getlist("group")
+    groups_list = list(dict.fromkeys(g.strip() for g in groups_raw if g.strip()))
+    if not groups_list:
+        groups_list = [None]
 
     if not member_id:
         return "member_id required", 400
@@ -822,20 +826,21 @@ def add_schedule():
         except Exception:
             return "Invalid days; must be integers 0=Mon .. 6=Sun", 400
 
-        new_schedule = {
-            "id": str(uuid.uuid4()),
-            "member_id": member_id,
-            "start_time": start_time,
-            "end_time": end_time or None,
-            "days": days_int,
-            "timezone": canonical_tz,
-            "active": True,
-            "group": group,
-            "priority": priority,
-        }
-        state["schedules"].append(new_schedule)
+        for group in groups_list:
+            new_schedule = {
+                "id": str(uuid.uuid4()),
+                "member_id": member_id,
+                "start_time": start_time,
+                "end_time": end_time or None,
+                "days": days_int,
+                "timezone": canonical_tz,
+                "active": True,
+                "group": group,
+                "priority": priority,
+            }
+            state["schedules"].append(new_schedule)
         save_state(state)
-        logging.info("Added range schedule: %s %s-%s (%s) days=%s group=%s p=%s", member_id, start_time, end_time or "", canonical_tz, days_int, group, priority)
+        logging.info("Added %d range schedule(s): %s %s-%s (%s) days=%s groups=%s p=%s", len(groups_list), member_id, start_time, end_time or "", canonical_tz, days_int, groups_list, priority)
         return _redirect_back()
 
     cron = request.form.get("cron", "").strip()
@@ -846,18 +851,19 @@ def add_schedule():
     except Exception as e:
         return f"Invalid cron: {e}", 400
 
-    new_schedule = {
-        "id": str(uuid.uuid4()),
-        "member_id": member_id,
-        "cron": cron,
-        "timezone": canonical_tz,
-        "active": True,
-        "group": group,
-        "priority": priority,
-    }
-    state["schedules"].append(new_schedule)
+    for group in groups_list:
+        new_schedule = {
+            "id": str(uuid.uuid4()),
+            "member_id": member_id,
+            "cron": cron,
+            "timezone": canonical_tz,
+            "active": True,
+            "group": group,
+            "priority": priority,
+        }
+        state["schedules"].append(new_schedule)
     save_state(state)
-    logging.info("Added cron schedule: %s (%s) group=%s p=%s", cron, canonical_tz, group, priority)
+    logging.info("Added %d cron schedule(s): %s (%s) groups=%s p=%s", len(groups_list), cron, canonical_tz, groups_list, priority)
     return _redirect_back()
 
 

@@ -211,26 +211,31 @@
       </label>
 
       {% if groups|length > 0 %}
-      <label>Group
-        <select name="group" id="sched-dlg-group">
-          <option value="">— Global (no group) —</option>
+      <label>Group</label>
+      <div class="multiselect" id="sched-dlg-group-ms">
+        <button type="button" class="multiselect-trigger" id="sched-dlg-group-trigger">— Global (no group) —</button>
+        <div class="multiselect-panel" id="sched-dlg-group-panel">
           {% for z in zones %}
-            <optgroup label="{{ z.name }}">
-              {% for g in groups if g.zone_id == z.id %}
-                <option value="{{ g.id }}">{{ g.name }}</option>
-              {% endfor %}
-            </optgroup>
+            <div class="multiselect-zone">{{ z.name }}</div>
+            {% for g in groups if g.zone_id == z.id %}
+              <label class="multiselect-option">
+                <input type="checkbox" value="{{ g.id }}" /> {{ g.name }}
+              </label>
+            {% endfor %}
           {% endfor %}
           {% set orphan_groups = groups | selectattr('zone_id', 'none') | list %}
           {% if orphan_groups|length > 0 %}
-            <optgroup label="Ungrouped">
-              {% for g in orphan_groups %}
-                <option value="{{ g.id }}">{{ g.name }}</option>
-              {% endfor %}
-            </optgroup>
+            <div class="multiselect-zone">Ungrouped</div>
+            {% for g in orphan_groups %}
+              <label class="multiselect-option">
+                <input type="checkbox" value="{{ g.id }}" /> {{ g.name }}
+              </label>
+            {% endfor %}
           {% endif %}
-        </select>
-      </label>
+        </div>
+      </div>
+      <div id="sched-dlg-group-hidden"></div>
+      <p class="hint" id="sched-dlg-group-hint" style="margin-top:2px">Select multiple groups to create one schedule per group.</p>
       {% endif %}
 
       <label>Priority (optional)
@@ -532,11 +537,15 @@
         schedSubmitBtn.textContent = 'Add';
         const memberSel = document.getElementById('sched-dlg-member');
         if (memberSel) memberSel.value = '';
-        const groupSel = document.getElementById('sched-dlg-group');
-        if (groupSel) groupSel.value = defaultSelectedGroup;
+        const gms = document.getElementById('sched-dlg-group-ms');
+        if (gms && gms._reset) {
+          gms._setEditMode(false);
+          gms._reset(defaultSelectedGroup ? [defaultSelectedGroup] : []);
+        }
+        const groupHint = document.getElementById('sched-dlg-group-hint');
+        if (groupHint) groupHint.style.display = '';
         const tzInput = document.getElementById('sched-dlg-tz');
         if (tzInput) tzInput.value = 'UTC';
-        // Restore default weekday checks (Mon-Fri)
         document.querySelectorAll('#sched-dlg-days input[name="days"]').forEach(cb => {
           cb.checked = parseInt(cb.value) < 5;
         });
@@ -556,8 +565,14 @@
 
         const memberSel = document.getElementById('sched-dlg-member');
         if (memberSel) memberSel.value = row.dataset.memberId || '';
-        const groupSel = document.getElementById('sched-dlg-group');
-        if (groupSel) groupSel.value = row.dataset.group || '';
+        const gms = document.getElementById('sched-dlg-group-ms');
+        if (gms && gms._setValues) {
+          gms._setEditMode(true);
+          const editGroup = row.dataset.group || '';
+          gms._setValues(editGroup ? [editGroup] : []);
+        }
+        const groupHint = document.getElementById('sched-dlg-group-hint');
+        if (groupHint) groupHint.style.display = 'none';
         const prioInput = document.getElementById('sched-dlg-priority');
         if (prioInput) prioInput.value = row.dataset.priority || '';
         const startInput = document.getElementById('sched-dlg-start');
@@ -575,6 +590,74 @@
 
         schedDialog.showModal();
       }
+
+      // ── Multi-select group dropdown widget ──
+      (function initGroupMultiselect() {
+        const ms = document.getElementById('sched-dlg-group-ms');
+        if (!ms) return;
+        const trigger = document.getElementById('sched-dlg-group-trigger');
+        const panel = document.getElementById('sched-dlg-group-panel');
+        const hiddenContainer = document.getElementById('sched-dlg-group-hidden');
+        const checkboxes = panel.querySelectorAll('input[type="checkbox"]');
+        let editMode = false;
+
+        trigger.addEventListener('click', (e) => {
+          e.preventDefault();
+          panel.classList.toggle('is-open');
+        });
+
+        document.addEventListener('click', (e) => {
+          if (!ms.contains(e.target)) panel.classList.remove('is-open');
+        });
+
+        function syncHidden() {
+          hiddenContainer.innerHTML = '';
+          const checked = panel.querySelectorAll('input[type="checkbox"]:checked');
+          if (checked.length === 0) {
+            const inp = document.createElement('input');
+            inp.type = 'hidden'; inp.name = 'group'; inp.value = '';
+            hiddenContainer.appendChild(inp);
+          } else {
+            checked.forEach(cb => {
+              const inp = document.createElement('input');
+              inp.type = 'hidden'; inp.name = 'group'; inp.value = cb.value;
+              hiddenContainer.appendChild(inp);
+            });
+          }
+          const names = [];
+          checked.forEach(cb => names.push(cb.closest('label').textContent.trim()));
+          if (names.length === 0) trigger.textContent = '— Global (no group) —';
+          else if (names.length === 1) trigger.textContent = names[0];
+          else trigger.textContent = names.length + ' groups selected';
+        }
+
+        checkboxes.forEach(cb => {
+          cb.addEventListener('change', () => {
+            if (editMode && cb.checked) {
+              checkboxes.forEach(o => { if (o !== cb) o.checked = false; });
+            }
+            syncHidden();
+          });
+        });
+
+        ms._setEditMode = (v) => { editMode = v; };
+        ms._setValues = (vals) => {
+          checkboxes.forEach(cb => { cb.checked = vals.includes(cb.value); });
+          syncHidden();
+        };
+        ms._reset = (defaults) => {
+          checkboxes.forEach(cb => { cb.checked = false; });
+          if (defaults && defaults.length) {
+            defaults.forEach(v => {
+              const cb = panel.querySelector('input[type="checkbox"][value="' + v + '"]');
+              if (cb) cb.checked = true;
+            });
+          }
+          syncHidden();
+        };
+
+        syncHidden();
+      })();
 
       // "+ Add Schedule" buttons (there may be one per branch)
       document.querySelectorAll('#btn-add-schedule, .btn-add-sched').forEach(btn => {

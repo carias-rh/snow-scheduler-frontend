@@ -505,7 +505,8 @@ def index():
         selected_zone = zones[0]["id"]
 
     eval_state = filter_state(state, group=selected_group, zone=selected_zone)
-    schedules = eval_state.get("schedules", [])
+    schedules = sorted(eval_state.get("schedules", []),
+                       key=lambda s: (s.get("priority") or float("inf")))
 
     current_schedules, current_started_utc = compute_current_overlaps(eval_state)
     current_schedule, _single_started, next_schedule, next_start_utc = compute_current_shift(eval_state)

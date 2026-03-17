@@ -274,7 +274,6 @@ objects:
         app.openshift.io/vcs-uri: 'git@github.com:carias-rh/lx-toolbox.git'
         openshift.io/generated-by: OpenShiftWebConsole
       name: snow-autoassign-${TEAM}
-      namespace: ${NAMESPACE}
       labels:
         app: snow-autoassign-${TEAM}
         app.kubernetes.io/component: snow-autoassign-${TEAM}
@@ -321,7 +320,6 @@ objects:
     kind: ConfigMap
     metadata:
       name: ${TEAM}-autoassign-env-file
-      namespace: ${NAMESPACE}
     immutable: false
     data:
       .env: >+

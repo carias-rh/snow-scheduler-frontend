@@ -22,7 +22,7 @@
 var APP_URL = "https://gls-cx-snow-frontend-scheduler.apps.tools-na100.dev.ole.redhat.com";
 var API_KEY = "";            // must match PTO_UPLOAD_API_KEY on the server (leave empty if not set)
 var CALENDAR_NAME = "CX Team";
-var SHEET_NAME = "2026";   // name of the tab containing the leave data
+var SHEET_NAME = new Date().getFullYear().toString();  // auto-selects the current year's tab
 // ─────────────────────────────────────────────────────────────────────────────
 
 var MONTH_MAP = {

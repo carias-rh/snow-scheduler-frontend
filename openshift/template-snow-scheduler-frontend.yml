@@ -20,7 +20,8 @@ parameters:
   - name: FRONTEND_IMAGE_STREAM_NAME
     value: snow-frontend-scheduler
   - name: NAMESPACE
-    description: Namespace holding the ImageStream (leave blank for same namespace)
+    description: Namespace holding the ImageStream
+    required: true
   - name: PVC_SIZE
     value: 5Mi
   - name: AUTOASSIGN_APP_NAME
@@ -272,7 +273,6 @@ objects:
         app.openshift.io/vcs-ref: feature/snow-autoassign-cx
         app.openshift.io/vcs-uri: 'git@github.com:carias-rh/lx-toolbox.git'
         openshift.io/generated-by: OpenShiftWebConsole
-      resourceVersion: '535553802'
       name: snow-autoassign-${TEAM}
       namespace: ${NAMESPACE}
       labels:
@@ -347,11 +347,9 @@ objects:
 
         FRONTEND_OPENSHIFT_ROUTE=https://${TEAM}-${FRONTEND_APP_NAME}.apps.tools-na100.dev.ole.redhat.com
 
-        $ASSIGNMENT_GROUP_ID=${ASSIGNMENT_GROUP_ID}
+        ASSIGNMENT_GROUP_ID=${ASSIGNMENT_GROUP_ID}
 
-        SNOW_GROUPS_CONFIG=${SNOW_GROUPS_CONFIG}
-
-        $ACKNOWLEDGMENT_TEMPLATE=${ACKNOWLEDGMENT_TEMPLATE}
+        ACKNOWLEDGMENT_TEMPLATE=${ACKNOWLEDGMENT_TEMPLATE}
 
       SNOW_GROUPS_CONFIG: "${SNOW_GROUPS_CONFIG}"
 
@@ -408,6 +406,12 @@ objects:
               env:
                 - name: LOG_LEVEL
                   value: INFO
+                - name: SNOW_GROUPS_CONFIG
+                  valueFrom:
+                    configMapKeyRef:
+                      name: ${TEAM}-autoassign-env-file
+                      key: SNOW_GROUPS_CONFIG
+                      optional: true
               terminationMessagePath: /dev/termination-log
               terminationMessagePolicy: File
               imagePullPolicy: Always

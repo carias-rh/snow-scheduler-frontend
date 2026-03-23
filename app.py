@@ -829,6 +829,34 @@ def toggle_member_schedules(member_id: str):
 # Schedule CRUD
 # ---------------------------------------------------------------------------
 
+def _should_new_schedule_be_active(state: Dict, member_id: str, group: Optional[str],
+                                   priority: Optional[int]) -> bool:
+    """Decide whether a newly added schedule should start active.
+
+    If the schedule has a priority and there is already an active schedule in the
+    same group held by a different (non-PTO) member at a higher (lower number)
+    priority, the new schedule starts inactive so it doesn't compete.
+    """
+    if priority is None or group is None:
+        return True
+    pto_set = set(state.get("pto", []))
+    if member_id in pto_set:
+        return False
+    for s in state.get("schedules", []):
+        if not s.get("active"):
+            continue
+        if s.get("group") != group:
+            continue
+        if s.get("member_id") == member_id:
+            continue
+        if s.get("member_id") in pto_set:
+            continue
+        other_p = s.get("priority")
+        if other_p is not None and other_p < priority:
+            return False
+    return True
+
+
 @app.route("/schedule/add", methods=["POST"])
 def add_schedule():
     state = load_state()
@@ -870,6 +898,7 @@ def add_schedule():
             return "Invalid days; must be integers 0=Mon .. 6=Sun", 400
 
         for group in groups_list:
+            active = _should_new_schedule_be_active(state, member_id, group, priority)
             new_schedule = {
                 "id": str(uuid.uuid4()),
                 "member_id": member_id,
@@ -877,13 +906,13 @@ def add_schedule():
                 "end_time": end_time or None,
                 "days": days_int,
                 "timezone": canonical_tz,
-                "active": True,
+                "active": active,
                 "group": group,
                 "priority": priority,
             }
             state["schedules"].append(new_schedule)
         save_state(state)
-        logging.info("Added %d range schedule(s): %s %s-%s (%s) days=%s groups=%s p=%s", len(groups_list), member_id, start_time, end_time or "", canonical_tz, days_int, groups_list, priority)
+        logging.info("Added %d range schedule(s): %s %s-%s (%s) days=%s groups=%s p=%s active=%s", len(groups_list), member_id, start_time, end_time or "", canonical_tz, days_int, groups_list, priority, active)
         return _redirect_back()
 
     cron = request.form.get("cron", "").strip()
@@ -895,18 +924,19 @@ def add_schedule():
         return f"Invalid cron: {e}", 400
 
     for group in groups_list:
+        active = _should_new_schedule_be_active(state, member_id, group, priority)
         new_schedule = {
             "id": str(uuid.uuid4()),
             "member_id": member_id,
             "cron": cron,
             "timezone": canonical_tz,
-            "active": True,
+            "active": active,
             "group": group,
             "priority": priority,
         }
         state["schedules"].append(new_schedule)
     save_state(state)
-    logging.info("Added %d cron schedule(s): %s (%s) groups=%s p=%s", len(groups_list), cron, canonical_tz, groups_list, priority)
+    logging.info("Added %d cron schedule(s): %s (%s) groups=%s p=%s active=%s", len(groups_list), cron, canonical_tz, groups_list, priority, active)
     return _redirect_back()
 
 

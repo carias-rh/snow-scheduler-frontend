@@ -30,6 +30,7 @@ DATA_FILE = BASE_DIR / "data" / "state.json"
 TZ_ALIASES: Dict[str, str] = {
     "UTC": "UTC",
     "GMT": "Etc/GMT",
+    # Europe
     "BST": "Europe/London",           # British Summer Time
     "CET": "Europe/Berlin",
     "CEST": "Europe/Berlin",
@@ -37,12 +38,30 @@ TZ_ALIASES: Dict[str, str] = {
     "EEST": "Europe/Bucharest",
     "WET": "Europe/Lisbon",
     "WEST": "Europe/Lisbon",
+    "MSK": "Europe/Moscow",
+    "TRT": "Europe/Istanbul",         # Turkey Time
+    # Asia
     "IST": "Asia/Kolkata",            # India Standard Time
     "PKT": "Asia/Karachi",
+    "CT": "Asia/Shanghai",            # China Time (common shorthand)
+    "CCT": "Asia/Shanghai",           # China Coast Time
+    "HKT": "Asia/Hong_Kong",
+    "SGT": "Asia/Singapore",
+    "MYT": "Asia/Kuala_Lumpur",       # Malaysia Time
+    "PHT": "Asia/Manila",             # Philippine Time
+    "WIB": "Asia/Jakarta",            # Western Indonesia
+    "ICT": "Asia/Bangkok",            # Indochina Time (Thailand, Vietnam)
+    "MMT": "Asia/Yangon",             # Myanmar Time
+    "NPT": "Asia/Kathmandu",
+    "BDT": "Asia/Dhaka",              # Bangladesh Time
     "JST": "Asia/Tokyo",
     "KST": "Asia/Seoul",
+    "TWT": "Asia/Taipei",             # Taiwan Time
+    # Oceania
     "AEST": "Australia/Sydney",
     "AEDT": "Australia/Sydney",
+    "ACST": "Australia/Adelaide",
+    "AWST": "Australia/Perth",
     "NZST": "Pacific/Auckland",
     "NZDT": "Pacific/Auckland",
     # North America
@@ -54,6 +73,17 @@ TZ_ALIASES: Dict[str, str] = {
     "MDT": "America/Denver",
     "PST": "America/Los_Angeles",
     "PDT": "America/Los_Angeles",
+    "AKST": "America/Anchorage",
+    "HST": "Pacific/Honolulu",
+    # Latin America
+    "BRT": "America/Sao_Paulo",       # Brasilia Time
+    "ART": "America/Argentina/Buenos_Aires",
+    "COT": "America/Bogota",          # Colombia Time
+    "PET": "America/Lima",            # Peru Time
+    "CLT": "America/Santiago",        # Chile Time
+    "VET": "America/Caracas",         # Venezuela Time
+    "ECT": "America/Guayaquil",       # Ecuador Time
+    "MXT": "America/Mexico_City",
 }
 
 

@@ -351,6 +351,115 @@
       <input type="hidden" name="name" id="rename-member-name" />
     </form>
 
+    <dialog id="member-default-sched-dialog" class="sched-dialog">
+      <form method="post" id="member-default-sched-form" action="">
+        <input type="hidden" name="_tab" value="members" />
+        <h3 id="member-default-sched-heading">Default schedule</h3>
+        <p class="hint" style="margin-top:0">
+          Template for <strong id="member-default-sched-title-name"></strong>.
+          <strong>Save and apply</strong> copies start/end, days, and timezone to every
+          <em>range-based</em> schedule for this person across all groups (priority and active state stay the same).
+          Cron-based schedules are left unchanged.
+        </p>
+        <label>Start time
+          <input name="start_time" id="member-def-start" type="time" required />
+        </label>
+        <label>End time (optional)
+          <input name="end_time" id="member-def-end" type="time" />
+        </label>
+        <fieldset style="border:0; padding:0; margin: 8px 0" id="member-def-days">
+          <legend class="sr-only">Days of week</legend>
+          <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="0" checked /> Mon</label>
+          <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="1" checked /> Tue</label>
+          <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="2" checked /> Wed</label>
+          <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="3" checked /> Thu</label>
+          <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="4" checked /> Fri</label>
+          <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="5" /> Sat</label>
+          <label style="display:inline-flex; align-items:center; gap:6px; margin-right:8px"><input type="checkbox" name="days" value="6" /> Sun</label>
+        </fieldset>
+        <label>Timezone
+          <select name="timezone" id="member-def-tz">
+            <optgroup label="UTC">
+              <option value="UTC" selected>UTC</option>
+            </optgroup>
+            <optgroup label="Americas">
+              <option value="America/New_York">US Eastern — America/New_York</option>
+              <option value="America/Chicago">US Central — America/Chicago</option>
+              <option value="America/Denver">US Mountain — America/Denver</option>
+              <option value="America/Los_Angeles">US Pacific — America/Los_Angeles</option>
+              <option value="America/Anchorage">US Alaska — America/Anchorage</option>
+              <option value="Pacific/Honolulu">US Hawaii — Pacific/Honolulu</option>
+              <option value="America/Toronto">Canada Eastern — America/Toronto</option>
+              <option value="America/Vancouver">Canada Pacific — America/Vancouver</option>
+              <option value="America/Mexico_City">Mexico — America/Mexico_City</option>
+              <option value="America/Sao_Paulo">Brazil — America/Sao_Paulo</option>
+              <option value="America/Argentina/Buenos_Aires">Argentina — America/Argentina/Buenos_Aires</option>
+              <option value="America/Bogota">Colombia — America/Bogota</option>
+              <option value="America/Lima">Peru — America/Lima</option>
+              <option value="America/Santiago">Chile — America/Santiago</option>
+              <option value="America/Caracas">Venezuela — America/Caracas</option>
+              <option value="America/Guayaquil">Ecuador — America/Guayaquil</option>
+            </optgroup>
+            <optgroup label="Europe &amp; Africa">
+              <option value="Europe/London">UK &amp; Ireland — Europe/London</option>
+              <option value="Europe/Lisbon">Portugal — Europe/Lisbon</option>
+              <option value="Europe/Berlin">Central Europe — Europe/Berlin</option>
+              <option value="Europe/Paris">France — Europe/Paris</option>
+              <option value="Europe/Madrid">Spain — Europe/Madrid</option>
+              <option value="Europe/Rome">Italy — Europe/Rome</option>
+              <option value="Europe/Amsterdam">Netherlands — Europe/Amsterdam</option>
+              <option value="Europe/Bucharest">Romania — Europe/Bucharest</option>
+              <option value="Europe/Warsaw">Poland — Europe/Warsaw</option>
+              <option value="Europe/Istanbul">Turkey — Europe/Istanbul</option>
+              <option value="Europe/Moscow">Russia Moscow — Europe/Moscow</option>
+              <option value="Europe/Athens">Greece — Europe/Athens</option>
+              <option value="Europe/Helsinki">Finland — Europe/Helsinki</option>
+              <option value="Europe/Stockholm">Sweden — Europe/Stockholm</option>
+              <option value="Europe/Prague">Czech Republic — Europe/Prague</option>
+              <option value="Africa/Cairo">Egypt — Africa/Cairo</option>
+              <option value="Africa/Johannesburg">South Africa — Africa/Johannesburg</option>
+              <option value="Africa/Nairobi">East Africa — Africa/Nairobi</option>
+            </optgroup>
+            <optgroup label="Middle East">
+              <option value="Asia/Dubai">UAE — Asia/Dubai</option>
+              <option value="Asia/Riyadh">Saudi Arabia — Asia/Riyadh</option>
+              <option value="Asia/Jerusalem">Israel — Asia/Jerusalem</option>
+              <option value="Asia/Tehran">Iran — Asia/Tehran</option>
+            </optgroup>
+            <optgroup label="Asia">
+              <option value="Asia/Kolkata">India — Asia/Kolkata</option>
+              <option value="Asia/Karachi">Pakistan — Asia/Karachi</option>
+              <option value="Asia/Dhaka">Bangladesh — Asia/Dhaka</option>
+              <option value="Asia/Kathmandu">Nepal — Asia/Kathmandu</option>
+              <option value="Asia/Shanghai">China — Asia/Shanghai</option>
+              <option value="Asia/Hong_Kong">Hong Kong — Asia/Hong_Kong</option>
+              <option value="Asia/Taipei">Taiwan — Asia/Taipei</option>
+              <option value="Asia/Singapore">Singapore — Asia/Singapore</option>
+              <option value="Asia/Kuala_Lumpur">Malaysia — Asia/Kuala_Lumpur</option>
+              <option value="Asia/Bangkok">Thailand — Asia/Bangkok</option>
+              <option value="Asia/Jakarta">Indonesia — Asia/Jakarta</option>
+              <option value="Asia/Manila">Philippines — Asia/Manila</option>
+              <option value="Asia/Tokyo">Japan — Asia/Tokyo</option>
+              <option value="Asia/Seoul">South Korea — Asia/Seoul</option>
+              <option value="Asia/Yangon">Myanmar — Asia/Yangon</option>
+            </optgroup>
+            <optgroup label="Oceania">
+              <option value="Australia/Sydney">Australia Eastern — Australia/Sydney</option>
+              <option value="Australia/Adelaide">Australia Central — Australia/Adelaide</option>
+              <option value="Australia/Perth">Australia Western — Australia/Perth</option>
+              <option value="Pacific/Auckland">New Zealand — Pacific/Auckland</option>
+            </optgroup>
+          </select>
+        </label>
+        <div class="dialog-buttons" style="flex-wrap:wrap">
+          <button type="submit" name="action" value="save">Save default</button>
+          <button type="submit" name="action" value="save_and_apply" class="btn-primary">Save and apply to all schedules</button>
+          <button type="submit" name="action" value="clear" formnovalidate class="btn-outline" style="border-color:var(--rhds-color-red-50, #c9190b); color:var(--rhds-color-red-50, #c9190b)">Clear default</button>
+          <button type="button" id="member-default-sched-cancel" class="btn-outline">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
     <rh-card>
       <h2 slot="heading">Members</h2>
       {% if members|length == 0 %}
@@ -360,15 +469,19 @@
           <div id="members-caption" class="sr-only">Select members to delete</div>
           <ul style="list-style:none; padding-left:0; margin:0">
             {% for m in members %}
-            <li class="member-row" data-member-id="{{ m.id }}">
+            <li class="member-row" data-member-id="{{ m.id }}" data-default-schedule='{{ (m.default_schedule or {}) | tojson }}'>
               <input type="checkbox" name="member_ids" value="{{ m.id }}" aria-label="Select member {{ m.name }}" />
               <span class="member-name" data-original="{{ m.name }}">{{ m.name }}</span>
+              {% if m.default_schedule %}
+              <span class="badge" style="font-size:11px;vertical-align:middle" title="Saved default schedule template">default</span>
+              {% endif %}
               <span class="member-edit-controls" style="display:none">
                 <input type="text" class="member-edit-input" value="{{ m.name }}" aria-label="New name" />
                 <button type="button" class="btn-sm btn-member-save" title="Save">&#10003;</button>
                 <button type="button" class="btn-sm btn-outline btn-member-cancel" title="Cancel">&#10005;</button>
               </span>
               <span class="member-actions">
+                <button type="button" class="btn-sm btn-outline btn-member-default-sched" title="Default schedule template" aria-label="Default schedule for {{ m.name }}">&#128197;</button>
                 <button type="button" class="btn-sm btn-outline btn-edit-member" title="Rename member" aria-label="Rename {{ m.name }}">&#9998;</button>
                 <button type="button" class="btn-sm btn-danger btn-delete-member" data-delete-id="{{ m.id }}" data-delete-name="{{ m.name }}" title="Delete member" aria-label="Delete {{ m.name }}">&#128465;</button>
               </span>
@@ -731,6 +844,14 @@
       const schedSubmitBtn = document.getElementById('sched-dlg-submit');
       const defaultSelectedGroup = '{{ selected_group or "" }}';
 
+      const MEMBER_DEFAULT_SCHEDULES = {
+        {% for m in members %}
+        {% if m.default_schedule %}
+        "{{ m.id }}": {{ m.default_schedule | tojson }},
+        {% endif %}
+        {% endfor %}
+      };
+
       function resetScheduleDialog() {
         schedForm.reset();
         schedIdField.value = '';
@@ -752,6 +873,23 @@
           cb.checked = parseInt(cb.value) < 5;
         });
       }
+
+      document.getElementById('sched-dlg-member')?.addEventListener('change', function() {
+        if (!schedForm || schedForm.action.indexOf('/schedule/add') === -1) return;
+        const mid = this.value;
+        const def = MEMBER_DEFAULT_SCHEDULES[mid];
+        if (!def) return;
+        const s = document.getElementById('sched-dlg-start');
+        const en = document.getElementById('sched-dlg-end');
+        const tz = document.getElementById('sched-dlg-tz');
+        if (s) s.value = def.start_time || '';
+        if (en) en.value = def.end_time || '';
+        if (tz) tz.value = def.timezone || 'UTC';
+        const days = new Set((def.days || []).map(String));
+        document.querySelectorAll('#sched-dlg-days input[name="days"]').forEach(cb => {
+          cb.checked = days.has(cb.value);
+        });
+      });
 
       function openScheduleDialog(row) {
         if (!row) {
@@ -905,6 +1043,70 @@
         const form = document.getElementById('single-dup-sched-form');
         form.action = `/schedule/duplicate/${encodeURIComponent(id)}`;
         submitWithTab(form);
+      });
+
+      // ── Member default schedule template ──
+      const memberDefaultDialog = document.getElementById('member-default-sched-dialog');
+      const memberDefaultForm = document.getElementById('member-default-sched-form');
+
+      function parseMemberRowDefault(row) {
+        const raw = row.getAttribute('data-default-schedule');
+        if (!raw) return {};
+        try {
+          return JSON.parse(raw);
+        } catch (err) {
+          return {};
+        }
+      }
+
+      function openMemberDefaultDialog(row) {
+        if (!memberDefaultDialog || !memberDefaultForm || !row) return;
+        const id = row.dataset.memberId;
+        const def = parseMemberRowDefault(row);
+        memberDefaultForm.action = `/members/default_schedule/${encodeURIComponent(id)}`;
+        const titleEl = document.getElementById('member-default-sched-title-name');
+        if (titleEl) titleEl.textContent = row.querySelector('.member-name')?.textContent?.trim() || '';
+        const st = document.getElementById('member-def-start');
+        const en = document.getElementById('member-def-end');
+        const tz = document.getElementById('member-def-tz');
+        if (st) st.value = def.start_time || '';
+        if (en) en.value = def.end_time || '';
+        if (tz) tz.value = def.timezone || 'UTC';
+        const days = new Set((def.days || []).map(String));
+        document.querySelectorAll('#member-def-days input[name="days"]').forEach(cb => {
+          cb.checked = days.size ? days.has(cb.value) : parseInt(cb.value, 10) < 5;
+        });
+        memberDefaultDialog.showModal();
+      }
+
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-member-default-sched');
+        if (!btn) return;
+        const row = btn.closest('.member-row');
+        if (row) openMemberDefaultDialog(row);
+      });
+
+      document.getElementById('member-default-sched-cancel')?.addEventListener('click', () => {
+        memberDefaultDialog?.close();
+      });
+
+      memberDefaultDialog?.addEventListener('click', (e) => {
+        if (e.target === memberDefaultDialog) memberDefaultDialog.close();
+      });
+
+      memberDefaultForm?.addEventListener('submit', (e) => {
+        const sub = e.submitter;
+        if (sub && sub.name === 'action' && sub.value === 'clear') {
+          if (!confirm('Remove the saved default schedule template for this member?')) {
+            e.preventDefault();
+            return;
+          }
+        }
+        if (sub && sub.value === 'save_and_apply') {
+          if (!confirm('Overwrite every range-based schedule for this member with these times, days, and timezone? Groups, priority, and active state stay the same. Cron-based schedules are not changed.')) {
+            e.preventDefault();
+          }
+        }
       });
 
       // ── Member inline edit ──

@@ -697,6 +697,110 @@ def delete_members_bulk():
     return _redirect_back()
 
 
+def _parse_default_schedule_from_form() -> Tuple[Optional[Dict], Optional[str]]:
+    """Parse range schedule fields from POST form. Returns (payload, error_message)."""
+    start_time = (request.form.get("start_time") or "").strip()
+    end_time = (request.form.get("end_time") or "").strip()
+    days = request.form.getlist("days")
+    timezone_name = (request.form.get("timezone") or "UTC").strip() or "UTC"
+
+    if not start_time:
+        return None, "Start time is required for a default schedule."
+
+    try:
+        _ = _parse_time_of_day(start_time)
+        if end_time:
+            _ = _parse_time_of_day(end_time)
+    except Exception as e:
+        return None, f"Invalid time: {e}"
+
+    try:
+        days_int = [int(d) for d in days]
+        for d in days_int:
+            if d < 0 or d > 6:
+                raise ValueError("day out of range")
+    except Exception:
+        return None, "Select at least one weekday; days must be 0=Mon .. 6=Sun."
+
+    if not days_int:
+        return None, "Select at least one day of the week."
+
+    try:
+        canonical_tz = canonicalize_timezone_name(timezone_name)
+    except Exception as e:
+        return None, f"Invalid timezone: {e}"
+
+    return {
+        "start_time": start_time,
+        "end_time": end_time or None,
+        "days": days_int,
+        "timezone": canonical_tz,
+    }, None
+
+
+def _apply_default_schedule_to_member_schedules(state: Dict, member_id: str, ds: Dict) -> int:
+    """Copy default range fields onto every range-based schedule for the member. Returns count updated."""
+    n = 0
+    for s in state.get("schedules", []):
+        if s.get("member_id") != member_id:
+            continue
+        if not _is_range_schedule(s):
+            continue
+        s["start_time"] = ds["start_time"]
+        s["end_time"] = ds.get("end_time")
+        s["days"] = list(ds["days"])
+        s["timezone"] = ds["timezone"]
+        s.pop("cron", None)
+        n += 1
+    return n
+
+
+@app.route("/members/default_schedule/<member_id>", methods=["POST"])
+def set_member_default_schedule(member_id: str):
+    """Optional per-member default shift template; can be applied to all range schedules at once."""
+    state = load_state()
+    member_map = get_member_map(state)
+    if member_id not in member_map:
+        return "Member not found", 404
+
+    action = (request.form.get("action") or "save").strip().lower()
+
+    if action == "clear":
+        for m in state.get("members", []):
+            if m.get("id") == member_id:
+                m.pop("default_schedule", None)
+                break
+        save_state(state)
+        logging.info("Cleared default schedule template for member %s", member_id)
+        return _redirect_back()
+
+    ds, err = _parse_default_schedule_from_form()
+    if err or not ds:
+        return err or "Invalid default schedule", 400
+
+    for m in state.get("members", []):
+        if m.get("id") == member_id:
+            m["default_schedule"] = ds
+            break
+
+    if action == "save_and_apply":
+        n = _apply_default_schedule_to_member_schedules(state, member_id, ds)
+        save_state(state)
+        logging.info(
+            "Updated default schedule for member %s and applied to %d range schedule(s)",
+            member_id,
+            n,
+        )
+        return _redirect_back()
+
+    if action == "save":
+        save_state(state)
+        logging.info("Saved default schedule template for member %s", member_id)
+        return _redirect_back()
+
+    return "Unknown action", 400
+
+
 def _toggle_pto(state: Dict, member_id: str, going_on_pto: bool,
                 group_filter: Optional[str] = None) -> Dict:
     """Core PTO toggle logic — modifies *state* in-place, returns stats.

@@ -1379,7 +1379,14 @@ def _read_ics_source(ics_url: str) -> bytes:
 
 
 def _fetch_active_pto_events(ics_url: str, now_utc: datetime) -> List[Dict]:
-    """Fetch an ICS feed (URL or local path) and return VEVENTs active at *now_utc*."""
+    """Fetch an ICS feed (URL or local path) and return VEVENTs active at *now_utc*.
+
+    For all-day events the UTC check window is widened to cover all timezone
+    offsets (UTC-12 … UTC+14) so that events are returned whenever the
+    calendar date could be "today" in *any* member timezone.  The original
+    dates are stored in ``all_day_start`` / ``all_day_end`` so the caller can
+    do a precise per-member-timezone check.
+    """
     cal = ICalCalendar.from_ical(_read_ics_source(ics_url))
 
     active: List[Dict] = []
@@ -1392,20 +1399,28 @@ def _fetch_active_pto_events(ics_url: str, now_utc: datetime) -> List[Dict]:
             continue
         start_val = dtstart.dt
         dtend = comp.get("DTEND")
+        all_day_start: Optional[date] = None
+        all_day_end: Optional[date] = None
 
         if isinstance(start_val, date) and not isinstance(start_val, datetime):
-            ev_start = datetime(start_val.year, start_val.month, start_val.day,
-                                tzinfo=timezone.utc)
+            all_day_start = start_val
             if dtend:
                 end_val = dtend.dt
                 if isinstance(end_val, date) and not isinstance(end_val, datetime):
-                    ev_end = datetime(end_val.year, end_val.month, end_val.day,
-                                      tzinfo=timezone.utc)
+                    all_day_end = end_val
                 else:
-                    ev_end = (end_val.astimezone(timezone.utc) if end_val.tzinfo
-                              else end_val.replace(tzinfo=timezone.utc))
+                    all_day_end = start_val + timedelta(days=1)
             else:
-                ev_end = ev_start + timedelta(days=1)
+                all_day_end = start_val + timedelta(days=1)
+
+            # Widen UTC window so the event is fetched for members whose
+            # local clock is already inside the PTO date.
+            # UTC+14 → date starts 14 h before midnight UTC
+            # UTC-12 → date ends  12 h after  midnight UTC
+            ev_start = datetime(all_day_start.year, all_day_start.month,
+                                all_day_start.day, tzinfo=timezone.utc) - timedelta(hours=14)
+            ev_end = datetime(all_day_end.year, all_day_end.month,
+                              all_day_end.day, tzinfo=timezone.utc) + timedelta(hours=12)
         else:
             if start_val.tzinfo is None:
                 start_val = start_val.replace(tzinfo=timezone.utc)
@@ -1430,7 +1445,7 @@ def _fetch_active_pto_events(ics_url: str, now_utc: datetime) -> List[Dict]:
                 attendees = []
             elif not isinstance(attendees, list):
                 attendees = [attendees]
-            active.append({
+            event: Dict = {
                 "summary": summary,
                 "start": ev_start.isoformat(),
                 "end": ev_end.isoformat(),
@@ -1438,7 +1453,11 @@ def _fetch_active_pto_events(ics_url: str, now_utc: datetime) -> List[Dict]:
                     str(a).replace("mailto:", "").strip().lower()
                     for a in attendees if a
                 ],
-            })
+            }
+            if all_day_start is not None:
+                event["all_day_start"] = all_day_start.isoformat()
+                event["all_day_end"] = all_day_end.isoformat()
+            active.append(event)
 
     return active
 
@@ -1461,6 +1480,63 @@ def _match_event_to_members(event: Dict, members: List[Dict],
     return matched
 
 
+def _get_member_timezones(state: Dict, member_id: str) -> List[str]:
+    """Return the unique canonical timezones associated with a member.
+
+    Checks the member's ``default_schedule`` first, then collects timezones
+    from all of their schedules.  Falls back to ``["UTC"]`` if nothing is
+    configured.
+    """
+    tzs: set = set()
+    for m in state.get("members", []):
+        if m["id"] == member_id:
+            ds_tz = m.get("default_schedule", {}).get("timezone")
+            if ds_tz:
+                try:
+                    tzs.add(canonicalize_timezone_name(ds_tz))
+                except Exception:
+                    pass
+            break
+
+    for s in state.get("schedules", []):
+        if s.get("member_id") == member_id and s.get("timezone"):
+            try:
+                tzs.add(canonicalize_timezone_name(s["timezone"]))
+            except Exception:
+                pass
+
+    return list(tzs) if tzs else ["UTC"]
+
+
+def _is_pto_active_for_member(event: Dict, now_utc: datetime,
+                               member_timezones: List[str]) -> bool:
+    """Check whether *event* is currently active for a member.
+
+    For timed events the caller already filtered by UTC window, so this
+    always returns ``True``.
+
+    For all-day events the check is timezone-aware: the event is active if
+    the member's local date (in **any** of their schedule timezones) falls
+    within ``[all_day_start, all_day_end)``.
+    """
+    if "all_day_start" not in event:
+        return True
+
+    ev_start_date = date.fromisoformat(event["all_day_start"])
+    ev_end_date = date.fromisoformat(event["all_day_end"])
+
+    for tz_name in member_timezones:
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            continue
+        local_date = now_utc.astimezone(tz).date()
+        if ev_start_date <= local_date < ev_end_date:
+            return True
+
+    return False
+
+
 def sync_pto_calendars() -> Dict:
     """Sync all enabled PTO calendars and auto-toggle PTO.
 
@@ -1481,6 +1557,9 @@ def sync_pto_calendars() -> Dict:
     errors: List[Dict] = []
     events_found = 0
 
+    # Pre-compute each member's timezones once for all-day-event checks.
+    member_tz_cache: Dict[str, List[str]] = {}
+
     for cal_cfg in enabled_cals:
         cal_id = cal_cfg["id"]
         ics_url = cal_cfg.get("ics_url", "")
@@ -1490,7 +1569,11 @@ def sync_pto_calendars() -> Dict:
             events_found += len(active_events)
             for ev in active_events:
                 for m in _match_event_to_members(ev, members, match_by):
-                    should_be_on_pto.add(m["id"])
+                    mid = m["id"]
+                    if mid not in member_tz_cache:
+                        member_tz_cache[mid] = _get_member_timezones(state, mid)
+                    if _is_pto_active_for_member(ev, now_utc, member_tz_cache[mid]):
+                        should_be_on_pto.add(mid)
             cal_cfg["last_sync"] = now_utc.isoformat()
             cal_cfg["last_sync_status"] = "ok"
             cal_cfg["last_sync_events"] = len(active_events)

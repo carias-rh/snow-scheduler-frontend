@@ -199,6 +199,8 @@ objects:
                 failureThreshold: 3
               resources: {}
               env:
+                - name: TEAM
+                  value: ${TEAM}
                 - name: SNOW_GROUPS_CONFIG
                   valueFrom:
                     configMapKeyRef:

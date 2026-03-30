@@ -23,6 +23,9 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent.parent / ".env")
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+_TEAM = os.environ.get("TEAM", "").strip()
+SITE_TITLE = f"{_TEAM} Shift Scheduler" if _TEAM else "Shift Scheduler"
+
 BASE_DIR = Path(__file__).parent
 DATA_FILE = BASE_DIR / "data" / "state.json"
 
@@ -579,6 +582,7 @@ def index():
 
     return render_template(
         "index.html",
+        site_title=SITE_TITLE,
         members=members,
         members_on_pto=members_on_pto,
         pto_calendars=pto_calendars,

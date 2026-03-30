@@ -24,7 +24,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 _TEAM = os.environ.get("TEAM", "").strip()
-SITE_TITLE = f"{_TEAM} Shift Scheduler" if _TEAM else "Shift Scheduler"
+SITE_TITLE = f"{_TEAM.upper()} - Shift Scheduler" if _TEAM else "Shift Scheduler"
 
 BASE_DIR = Path(__file__).parent
 DATA_FILE = BASE_DIR / "data" / "state.json"

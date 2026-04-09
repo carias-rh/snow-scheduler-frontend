@@ -436,3 +436,52 @@ header { border-bottom: 2px solid var(--rhds-brand-red); padding: var(--rhds-spa
   background: #c9190b;
   color: #fff;
 }
+
+/* ── PTO source badges ── */
+.badge--gcal {
+  background: #4285f4;
+  color: #fff;
+}
+.badge--push {
+  background: #0066cc;
+  color: #fff;
+}
+
+/* ── Leave Calendar (FullCalendar overrides) ── */
+#leave-calendar {
+  max-width: 100%;
+  margin-top: var(--rhds-space-200);
+}
+#leave-calendar .fc {
+  font-family: "Red Hat Text", "Red Hat Display", system-ui, sans-serif;
+  font-size: 13px;
+}
+#leave-calendar .fc-toolbar-title {
+  font-size: 18px !important;
+  font-weight: 600;
+}
+#leave-calendar .fc-button {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+#leave-calendar .fc-button-primary {
+  background: var(--rhds-brand-red);
+  border-color: var(--rhds-brand-red);
+}
+#leave-calendar .fc-button-primary:not(:disabled).fc-button-active,
+#leave-calendar .fc-button-primary:not(:disabled):hover {
+  background: #a30000;
+  border-color: #a30000;
+}
+#leave-calendar .fc-event {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+#leave-calendar .fc-daygrid-day:hover {
+  background: #fff5f5;
+}
+#leave-calendar .fc-highlight {
+  background: rgba(238, 0, 0, 0.08);
+}

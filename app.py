@@ -1359,6 +1359,86 @@ def api_groups():
 
 
 # ---------------------------------------------------------------------------
+# Leave Calendar CRUD (built-in leave events stored in state.json)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/leave_events", methods=["GET"])
+def api_leave_events():
+    """Return leave events for FullCalendar, optionally filtered by date range."""
+    state = load_state()
+    events = state.get("leave_events", [])
+    member_map = get_member_map(state)
+
+    start_param = request.args.get("start", "")
+    end_param = request.args.get("end", "")
+
+    fc_events = []
+    for ev in events:
+        if start_param and ev.get("end", "") < start_param:
+            continue
+        if end_param and ev.get("start", "") >= end_param:
+            continue
+        member = member_map.get(ev.get("member_id"), {})
+        fc_events.append({
+            "id": ev["id"],
+            "title": member.get("name", "Unknown"),
+            "start": ev["start"],
+            "end": ev["end"],
+            "allDay": True,
+            "extendedProps": {
+                "member_id": ev.get("member_id"),
+                "leave_type": ev.get("leave_type", "Leave"),
+            },
+        })
+    return jsonify(fc_events)
+
+
+@app.route("/api/leave_events", methods=["POST"])
+def add_leave_event():
+    """Create a leave event."""
+    data = request.get_json(force=True)
+    member_id = data.get("member_id", "").strip()
+    start = data.get("start", "").strip()
+    end = data.get("end", "").strip()
+    leave_type = data.get("leave_type", "Leave").strip() or "Leave"
+
+    if not member_id or not start:
+        return jsonify({"ok": False, "error": "member_id and start required"}), 400
+    if not end:
+        end_date = datetime.strptime(start, "%Y-%m-%d").date() + timedelta(days=1)
+        end = end_date.isoformat()
+
+    state = load_state()
+    event = {
+        "id": str(uuid.uuid4()),
+        "member_id": member_id,
+        "start": start,
+        "end": end,
+        "leave_type": leave_type,
+    }
+    state.setdefault("leave_events", []).append(event)
+    save_state(state)
+
+    member_map = get_member_map(state)
+    logging.info("Added leave event: %s %s–%s (%s)",
+                 member_map.get(member_id, {}).get("name", member_id), start, end, leave_type)
+    return jsonify({"ok": True, "event": event})
+
+
+@app.route("/api/leave_events/<event_id>", methods=["DELETE"])
+def delete_leave_event(event_id: str):
+    """Delete a leave event."""
+    state = load_state()
+    before = len(state.get("leave_events", []))
+    state["leave_events"] = [e for e in state.get("leave_events", []) if e["id"] != event_id]
+    if len(state.get("leave_events", [])) == before:
+        return jsonify({"ok": False, "error": "Not found"}), 404
+    save_state(state)
+    logging.info("Deleted leave event: %s", event_id)
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
 # PTO Calendar (ICS Feed) Sync
 # ---------------------------------------------------------------------------
 
@@ -1588,6 +1668,29 @@ def sync_pto_calendars() -> Dict:
             cal_cfg["last_sync_status"] = f"error: {exc}"
             cal_cfg["last_sync_events"] = 0
             errors.append({"calendar": cal_cfg.get("name", cal_id), "error": str(exc)})
+
+    # Also check built-in leave events from the Leave Calendar.
+    # Use each member's local date (from their schedule timezones) so that
+    # PTO triggers at the right time regardless of UTC offset.
+    for ev in state.get("leave_events", []):
+        mid = ev.get("member_id")
+        if not mid:
+            continue
+        if mid not in member_tz_cache:
+            member_tz_cache[mid] = _get_member_timezones(state, mid)
+        tzs = member_tz_cache[mid] or ["UTC"]
+        is_active = False
+        for tz_name in tzs:
+            try:
+                local_date = now_utc.astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
+            except Exception:
+                local_date = now_utc.strftime("%Y-%m-%d")
+            if ev.get("start", "") <= local_date < ev.get("end", ""):
+                is_active = True
+                break
+        if is_active:
+            should_be_on_pto.add(mid)
+            events_found += 1
 
     pto_set = set(state.get("pto", []))
     toggled_on: List[str] = []

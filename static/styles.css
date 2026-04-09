@@ -485,3 +485,25 @@ header { border-bottom: 2px solid var(--rhds-brand-red); padding: var(--rhds-spa
 #leave-calendar .fc-highlight {
   background: rgba(238, 0, 0, 0.08);
 }
+
+/* ── Leave dialog ── */
+.leave-dialog {
+  max-width: 400px;
+}
+.leave-dialog h3 {
+  font-size: 20px;
+  margin-bottom: var(--rhds-space-400);
+}
+.leave-date-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.leave-date-row label {
+  flex: 1;
+}
+.leave-date-arrow {
+  font-size: 20px;
+  color: var(--rhds-text-muted);
+  padding-bottom: 8px;
+}

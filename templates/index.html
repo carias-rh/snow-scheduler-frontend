@@ -519,7 +519,7 @@
       <div id="leave-calendar"></div>
     </rh-card>
 
-    <dialog id="leave-event-dialog" class="sched-dialog">
+    <dialog id="leave-event-dialog" class="sched-dialog leave-dialog">
       <form id="leave-event-form">
         <h3 id="leave-dlg-title">Add Leave</h3>
 
@@ -532,27 +532,18 @@
           </select>
         </label>
 
-        <div style="display:flex; gap:12px">
-          <label style="flex:1">Start date
+        <div class="leave-date-row">
+          <label>From
             <input type="date" id="leave-dlg-start" required />
           </label>
-          <label style="flex:1">Last day of leave
+          <span class="leave-date-arrow">&#8594;</span>
+          <label>To
             <input type="date" id="leave-dlg-end" required />
           </label>
         </div>
+        <p id="leave-dlg-date-hint" class="hint" style="margin-top:2px"></p>
 
-        <label>Leave Type
-          <select id="leave-dlg-type">
-            <option value="Leave">Leave</option>
-            <option value="Bank Holiday">Bank Holiday</option>
-            <option value="Holiday">Holiday</option>
-            <option value="Recharge Day">Recharge Day</option>
-            <option value="Half Day">Half Day</option>
-            <option value="Sick Leave">Sick Leave</option>
-          </select>
-        </label>
-
-        <p id="leave-dlg-date-hint" class="hint"></p>
+        <input type="hidden" id="leave-dlg-type" value="Leave" />
 
         <div class="dialog-buttons">
           <button type="submit">Add</button>

@@ -93,6 +93,16 @@
     <p class="hint">Timezone: <code id="timeline-tz">UTC</code> · Date: <code id="timeline-date"></code></p>
   </rh-card>
 
+  {% set on_leave_today = members | selectattr('id', 'in', members_on_pto) | list %}
+  {% if on_leave_today|length > 0 %}
+  <div class="on-leave-banner" role="status" aria-live="polite">
+    <strong>On leave today:</strong>
+    {% for m in on_leave_today %}
+      <span class="on-leave-chip">{{ m.name }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {# ── Schedule table macro ── #}
   {% macro schedule_table(rows, show_group) %}
     {% set has_priority = rows | selectattr('priority') | list | length > 0 %}
@@ -513,6 +523,7 @@
 
   {# ════════════ Leave Calendar view ════════════ #}
   <section id="view-leave-calendar" role="region" aria-labelledby="nav-leave-calendar" hidden>
+
     <rh-card>
       <h2 slot="heading">Leave Calendar</h2>
       <p class="hint" style="margin-bottom:12px">Click a date or drag across multiple days to add leave. Click an event to delete it. You can also adjust the date range in the dialog.</p>
@@ -1264,14 +1275,8 @@
         const toggle = e.target;
         if (!toggle.classList.contains('pto-toggle')) return;
         const memberId = toggle.getAttribute('data-pto-member');
-        const memberName = toggle.getAttribute('data-pto-name') || memberId;
         const goingOnPto = toggle.checked;
         const active = goingOnPto ? 'false' : 'true';
-        const label = goingOnPto ? 'PTO On' : 'PTO Off';
-        if (!confirm(`${label} for ${memberName}?`)) {
-          toggle.checked = !toggle.checked;
-          return;
-        }
         try {
           const res = await fetch(`/members/toggle_schedules/${encodeURIComponent(memberId)}`, {
             method: 'POST',
@@ -1402,7 +1407,8 @@
               .then(r => r.json())
               .then(data => {
                 if (data.ok) {
-                  ev.remove();
+                  window.location.hash = 'leave-calendar';
+                  window.location.reload();
                 } else {
                   alert('Failed to delete: ' + (data.error || ''));
                 }
@@ -1430,7 +1436,9 @@
             const data = await res.json();
             if (data.ok) {
               closeLeaveDialog();
-              calendar.refetchEvents();
+              // Members panel & "On leave today" are server-rendered; refetchEvents() alone does not update PTO UI.
+              window.location.hash = 'leave-calendar';
+              window.location.reload();
             } else {
               alert('Failed: ' + (data.error || ''));
             }

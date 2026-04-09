@@ -1422,7 +1422,17 @@ def add_leave_event():
     member_map = get_member_map(state)
     logging.info("Added leave event: %s %s–%s (%s)",
                  member_map.get(member_id, {}).get("name", member_id), start, end, leave_type)
-    return jsonify({"ok": True, "event": event})
+
+    sync_result = None
+    try:
+        sync_result = sync_pto_calendars()
+    except Exception as exc:
+        logging.warning("PTO sync after leave add failed: %s", exc)
+
+    payload: Dict = {"ok": True, "event": event}
+    if sync_result is not None:
+        payload["sync"] = sync_result
+    return jsonify(payload)
 
 
 @app.route("/api/leave_events/<event_id>", methods=["DELETE"])
@@ -1435,7 +1445,17 @@ def delete_leave_event(event_id: str):
         return jsonify({"ok": False, "error": "Not found"}), 404
     save_state(state)
     logging.info("Deleted leave event: %s", event_id)
-    return jsonify({"ok": True})
+
+    sync_result = None
+    try:
+        sync_result = sync_pto_calendars()
+    except Exception as exc:
+        logging.warning("PTO sync after leave delete failed: %s", exc)
+
+    payload: Dict = {"ok": True}
+    if sync_result is not None:
+        payload["sync"] = sync_result
+    return jsonify(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -1630,9 +1650,9 @@ def sync_pto_calendars() -> Dict:
     calendars = state.get("pto_calendars", [])
     enabled_cals = [c for c in calendars if c.get("enabled", True)]
 
-    if not enabled_cals:
-        save_state(state)
-        return {"synced": 0, "events_found": 0, "toggled_on": [], "toggled_off": [], "errors": []}
+    # Always run the full sync through PTO reconciliation. Do not return early when
+    # there are no ICS feeds and no leave events: deleting the last leave entry must
+    # still clear pto_auto members who were only on PTO from the Leave Calendar.
 
     now_utc = get_now_utc()
     members = state.get("members", [])

@@ -1240,7 +1240,13 @@ def api_shift():
     active_schedules, active_set_started = _determine_all_active_at(eval_state, now_utc)
     member_map = get_member_map(state)
 
+    filter_label = f"group={group_filter}" if group_filter else (f"zone={zone_filter}" if zone_filter else "all")
+
     if not active_schedules:
+        logging.info(
+            "/api/shift [%s] No active schedules at %s — nobody on shift",
+            filter_label, now_utc.strftime("%Y-%m-%d %H:%M UTC"),
+        )
         return jsonify({
             "id": None,
             "name": None,
@@ -1248,18 +1254,25 @@ def api_shift():
             "round_robin": False,
         })
 
+    active_names = [
+        member_map.get(s.get("member_id"), {}).get("name", "?") for s in active_schedules
+    ]
+
     if len(active_schedules) == 1:
         only = active_schedules[0]
         member = member_map.get(only.get("member_id"))
+        name = member.get("name") if member else None
+        logging.info(
+            "/api/shift [%s] Single active schedule → %s (no round-robin)",
+            filter_label, name,
+        )
         return jsonify({
             "id": member.get("id") if member else None,
-            "name": member.get("name") if member else None,
+            "name": name,
             "on_shift": True,
             "round_robin": False,
         })
 
-    # Round-robin over overlapping active schedules.
-    # rr state is persisted to the original (unfiltered) state.
     group_key_part = "|".join([s.get("id") for s in active_schedules])
     group_time = (active_set_started.isoformat() if active_set_started else "")
     group_key = f"{group_time}|{group_key_part}"
@@ -1273,9 +1286,14 @@ def api_shift():
 
     selected = active_schedules[next_index]
     member = member_map.get(selected.get("member_id"))
+    name = member.get("name") if member else None
+    logging.info(
+        "/api/shift [%s] Round-robin active: pool=%s | prev_idx=%d → next_idx=%d → selected: %s",
+        filter_label, active_names, prev_index, next_index, name,
+    )
     return jsonify({
         "id": member.get("id") if member else None,
-        "name": member.get("name") if member else None,
+        "name": name,
         "on_shift": True,
         "round_robin": True,
     })

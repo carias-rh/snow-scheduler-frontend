@@ -1229,74 +1229,148 @@ def set_schedule_active(schedule_id: str):
 # Shift API (consumed by servicenow_autoassign)
 # ---------------------------------------------------------------------------
 
+_RR_DEFAULT_GROUP = "_default"
+
+
+def _nobody_on_shift() -> Dict:
+    return {
+        "id": None,
+        "name": None,
+        "on_shift": False,
+        "round_robin": False,
+    }
+
+
+def _rr_group_key(group_filter: Optional[str]) -> str:
+    return group_filter or _RR_DEFAULT_GROUP
+
+
+def _on_shift_pool(eval_state: Dict, member_map: Dict[str, Dict]) -> Tuple[List[str], Dict[str, Tuple[Dict, Dict]]]:
+    """Unique on-shift engineers by name, sorted, with member+schedule for payload."""
+    active_schedules, _started = _determine_all_active_at(eval_state, get_now_utc())
+    seen: Dict[str, Tuple[Dict, Dict]] = {}
+    for sched in active_schedules:
+        member = member_map.get(sched.get("member_id"))
+        if not member:
+            continue
+        name = member.get("name")
+        if not name or name in seen:
+            continue
+        seen[name] = (member, sched)
+    names = sorted(seen)
+    return names, seen
+
+
+def _next_name(pool: List[str], last: Optional[str]) -> Optional[str]:
+    """Next name still in the pool after *last*, wrapping. Spec #29."""
+    if not pool:
+        return None
+    if len(pool) == 1:
+        return pool[0]
+    if not last:
+        return pool[0]
+    for name in pool:
+        if name > last:
+            return name
+    return pool[0]
+
+
+def _shift_payload(name: Optional[str], seen: Dict[str, Tuple[Dict, Dict]], pool_size: int) -> Dict:
+    if not name or name not in seen:
+        return _nobody_on_shift()
+    member, sched = seen[name]
+    return {
+        "id": member.get("id"),
+        "name": name,
+        "schedule_id": sched.get("id"),
+        "on_shift": True,
+        "round_robin": pool_size > 1,
+    }
+
+
+def _peek_shift(state: Dict, group_filter: Optional[str], zone_filter: Optional[str]) -> Dict:
+    eval_state = filter_state(state, group=group_filter, zone=zone_filter)
+    member_map = get_member_map(state)
+    pool, seen = _on_shift_pool(eval_state, member_map)
+    last = state.get("rr", {}).get(_rr_group_key(group_filter))
+    if not isinstance(last, str):
+        last = None
+    next_name = _next_name(pool, last)
+    return _shift_payload(next_name, seen, len(pool))
+
+
+def _commit_shift(state: Dict, group_filter: Optional[str], assigned_name: str) -> Dict:
+    key = _rr_group_key(group_filter)
+    rr_map = state.get("rr") or {}
+    rr_map[key] = assigned_name
+    state["rr"] = rr_map
+    save_state(state)
+    zone_filter = None
+    return _peek_shift(state, group_filter, zone_filter)
+
+
 @app.route("/api/shift", methods=["GET"])
 def api_shift():
+    """Peek who should receive the next assignment. Does not write unless
+    ``advance=true`` (deprecated cutover for current Auto-Assign).
+    """
     state = load_state()
     group_filter = request.args.get("group")
     zone_filter = request.args.get("zone")
     eval_state = filter_state(state, group=group_filter, zone=zone_filter)
-
-    now_utc = get_now_utc()
-    active_schedules, active_set_started = _determine_all_active_at(eval_state, now_utc)
     member_map = get_member_map(state)
-
+    pool, seen = _on_shift_pool(eval_state, member_map)
     filter_label = f"group={group_filter}" if group_filter else (f"zone={zone_filter}" if zone_filter else "all")
+    advance = request.args.get("advance", "false").lower() == "true"
 
-    if not active_schedules:
+    if not pool:
         logging.info(
             "/api/shift [%s] No active schedules at %s — nobody on shift",
-            filter_label, now_utc.strftime("%Y-%m-%d %H:%M UTC"),
+            filter_label, get_now_utc().strftime("%Y-%m-%d %H:%M UTC"),
         )
-        return jsonify({
-            "id": None,
-            "name": None,
-            "on_shift": False,
-            "round_robin": False,
-        })
+        return jsonify(_nobody_on_shift())
 
-    active_names = [
-        member_map.get(s.get("member_id"), {}).get("name", "?") for s in active_schedules
-    ]
+    if advance:
+        assigned_name = (request.args.get("assigned_name") or "").strip()
+        if not assigned_name:
+            last = state.get("rr", {}).get(_rr_group_key(group_filter))
+            if not isinstance(last, str):
+                last = None
+            assigned_name = _next_name(pool, last) or ""
+        if assigned_name:
+            payload = _commit_shift(state, group_filter, assigned_name)
+            logging.info(
+                "/api/shift [%s] Deprecated consume-on-GET committed %s → next %s",
+                filter_label, assigned_name, payload.get("name"),
+            )
+            return jsonify(payload)
 
-    if len(active_schedules) == 1:
-        only = active_schedules[0]
-        member = member_map.get(only.get("member_id"))
-        name = member.get("name") if member else None
-        logging.info(
-            "/api/shift [%s] Single active schedule → %s (no round-robin)",
-            filter_label, name,
-        )
-        return jsonify({
-            "id": member.get("id") if member else None,
-            "name": name,
-            "on_shift": True,
-            "round_robin": False,
-        })
-
-    group_key_part = "|".join([s.get("id") for s in active_schedules])
-    group_time = (active_set_started.isoformat() if active_set_started else "")
-    group_key = f"{group_time}|{group_key_part}"
-
-    rr_map = state.get("rr", {})
-    prev_index = rr_map.get(group_key, -1)
-    next_index = (prev_index + 1) % len(active_schedules)
-    rr_map[group_key] = next_index
-    state["rr"] = rr_map
-    save_state(state)
-
-    selected = active_schedules[next_index]
-    member = member_map.get(selected.get("member_id"))
-    name = member.get("name") if member else None
+    last = state.get("rr", {}).get(_rr_group_key(group_filter))
+    if not isinstance(last, str):
+        last = None
+    next_name = _next_name(pool, last)
     logging.info(
-        "/api/shift [%s] Round-robin active: pool=%s | prev_idx=%d → next_idx=%d → selected: %s",
-        filter_label, active_names, prev_index, next_index, name,
+        "/api/shift [%s] Peek pool=%s last=%s → %s",
+        filter_label, pool, last or "-", next_name,
     )
-    return jsonify({
-        "id": member.get("id") if member else None,
-        "name": name,
-        "on_shift": True,
-        "round_robin": True,
-    })
+    return jsonify(_shift_payload(next_name, seen, len(pool)))
+
+
+@app.route("/api/shift/commit", methods=["POST"])
+def api_shift_commit():
+    """Record who actually received the work. Returns the new next peek."""
+    data = request.get_json(silent=True) or {}
+    assigned_name = (data.get("assigned_name") or request.form.get("assigned_name") or "").strip()
+    if not assigned_name:
+        return jsonify({"error": "assigned_name required"}), 400
+    state = load_state()
+    group_filter = request.args.get("group") or data.get("group")
+    payload = _commit_shift(state, group_filter, assigned_name)
+    logging.info(
+        "/api/shift/commit group=%s assigned=%s → next %s",
+        group_filter or _RR_DEFAULT_GROUP, assigned_name, payload.get("name"),
+    )
+    return jsonify(payload)
 
 
 # ---------------------------------------------------------------------------

@@ -1311,49 +1311,14 @@ def _commit_shift(state: Dict, group_filter: Optional[str], assigned_name: str) 
 
 @app.route("/api/shift", methods=["GET"])
 def api_shift():
-    """Peek who should receive the next assignment. Does not write unless
-    ``advance=true`` (deprecated cutover for current Auto-Assign).
-    """
+    """Peek who should receive the next assignment. Never writes."""
     state = load_state()
     group_filter = request.args.get("group")
     zone_filter = request.args.get("zone")
-    eval_state = filter_state(state, group=group_filter, zone=zone_filter)
-    member_map = get_member_map(state)
-    pool, seen = _on_shift_pool(eval_state, member_map)
     filter_label = f"group={group_filter}" if group_filter else (f"zone={zone_filter}" if zone_filter else "all")
-    advance = request.args.get("advance", "false").lower() == "true"
-
-    if not pool:
-        logging.info(
-            "/api/shift [%s] No active schedules at %s — nobody on shift",
-            filter_label, get_now_utc().strftime("%Y-%m-%d %H:%M UTC"),
-        )
-        return jsonify(_nobody_on_shift())
-
-    if advance:
-        assigned_name = (request.args.get("assigned_name") or "").strip()
-        if not assigned_name:
-            last = state.get("rr", {}).get(_rr_group_key(group_filter))
-            if not isinstance(last, str):
-                last = None
-            assigned_name = _next_name(pool, last) or ""
-        if assigned_name:
-            payload = _commit_shift(state, group_filter, assigned_name)
-            logging.info(
-                "/api/shift [%s] Deprecated consume-on-GET committed %s → next %s",
-                filter_label, assigned_name, payload.get("name"),
-            )
-            return jsonify(payload)
-
-    last = state.get("rr", {}).get(_rr_group_key(group_filter))
-    if not isinstance(last, str):
-        last = None
-    next_name = _next_name(pool, last)
-    logging.info(
-        "/api/shift [%s] Peek pool=%s last=%s → %s",
-        filter_label, pool, last or "-", next_name,
-    )
-    return jsonify(_shift_payload(next_name, seen, len(pool)))
+    payload = _peek_shift(state, group_filter, zone_filter)
+    logging.info("/api/shift [%s] Peek → %s", filter_label, payload.get("name") or "-")
+    return jsonify(payload)
 
 
 @app.route("/api/shift/commit", methods=["POST"])

@@ -153,9 +153,9 @@ def test_groups_do_not_share_last_assigned(client):
     assert client.get("/api/shift?group=emea").get_json()["name"] == CARLOS
 
 
-def test_explicit_advance_true_still_rotates(client):
+def test_advance_true_does_not_rotate(client):
     client.seed([CARLOS, CHETAN, SAMIK])
     assert client.get("/api/shift").get_json()["name"] == CARLOS
     after = client.get("/api/shift?advance=true").get_json()["name"]
-    assert after == CHETAN
-    assert client.get("/api/shift").get_json()["name"] == CHETAN
+    assert after == CARLOS
+    assert client.get("/api/shift").get_json()["name"] == CARLOS
